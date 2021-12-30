@@ -1,0 +1,337 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2513
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww10800\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 *Who: Jon Zimmerman\
+*What: Airport Accessibility Analysis\
+*When: 04/08/20\
+\
+/*----------------------------------------------*/\
+/* Step 1: Load in 2 datasets: Routes, Airports */\
+/*----------------------------------------------*/\
+filename webdata url 'https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat';\
+data routes;\
+infile webdata dlm=',' firstobs=2 dsd;\
+input Airline $ AirlineID $ IATA $ SourceAP_ID $ Dest_IATA $ DestAP_ID $ Codeshare $ Stops $ Equipment $;\
+run;\
+proc print data=routes (firstobs=1 obs=5);\
+run;\
+\
+filename webdata2 url 'https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports-extended.dat';\
+data airports;\
+length AirportName $50. City $50. Country $50. TzDatabaseTz $50. Type $50. Source $40.;\
+infile webdata2 dlm=',' firstobs=2 dsd;\
+input AirportID $ AirportName $ City $ Country $ IATA $ ICAO $ Latitude $ Longitude $ Altitude $ Timezone $ DST $ TzDatabaseTz $ Type $ Source $;\
+run;\
+proc print data=airports (firstobs=1 obs=5);\
+run;\
+/*-------------------------------*/\
+/* Step 2: Join Datasets on IATA */\
+/*-------------------------------*/\
+proc contents data=routes; run;\
+proc contents data=airports; run;\
+\
+proc sort data=routes out=routes_s; by IATA; run;\
+proc sort data=airports out=airp_s; by IATA; run;\
+\
+data fullair;\
+merge routes_s (in=a) airp_s (in=b);\
+by IATA;\
+if a and b;\
+run;\
+\
+proc print data=fullair (firstobs=1 obs=5);\
+run;\
+\
+/*Pare down dataset*/\
+data fullair;\
+keep IATA Dest_IATA AirportName City Country TzDatabaseTz Type Source Latitude Longitude;\
+set fullair;\
+run;\
+\
+proc freq data=fullair;\
+table Source Type;\
+run;\
+\
+data fullair;\
+set fullair;\
+if Source not in ("OurAirports") | Type not in ("airport") then delete;\
+run;\
+\
+data fullair;\
+keep IATA Dest_IATA AirportName City Country TzDatabaseTz Latitude Longitude;\
+set fullair;\
+run;\
+* Total rows: 67251\
+* Total columns: 8;\
+\
+/* Make an unique ID */\
+data fullair;\
+set fullair;\
+UniqueID=catx('_',IATA,Dest_IATA);\
+run;\
+\
+proc print data=fullair (firstobs=1 obs=5);\
+run;\
+\
+\
+proc sql;\
+  select count(*) as total, count(distinct(UniqueID)) as Unique_Values\
+  from fullair;\
+quit;\
+*Total: 67251\
+*Unique Values: 37275;\
+\
+\
+/* Get rid of duplicates by UniqueID */\
+proc sort data=fullair out=fullair2 nodupkey ;\
+by UniqueID ;\
+run;\
+\
+proc print data=fullair2 (firstobs=1 obs=2);\
+run;\
+proc sql;\
+  select count(*) as total, count(distinct(UniqueID)) as UniqueValues\
+  from fullair2;\
+quit;\
+\
+*Total: 37275;\
+*Unique Values: 37275;\
+\
+/* Check for any more inconsistencies */\
+proc sql;\
+  select count(distinct(IATA)) as Total_IATA, \
+         count(distinct(AirportName)) as Total_Names\
+  from fullair2;\
+quit;\
+* Total_IATA:  3251;\
+* Total_Names: 3238;\
+\
+/*** Some IATA values have identical corresponding Airport Names ***/\
+proc sql;\
+  create table test1 as \
+  select AirportName,IATA, count(*) as all_count\
+  from fullair2\
+  group by AirportName, IATA\
+  order by all_count desc;\
+quit;\
+proc sql;\
+  create table test2 as \
+  select AirportName, count(*) as AN_count\
+  from fullair2\
+  group by AirportName\
+  order by AN_count desc;\
+quit;\
+\
+proc sql;\
+	create table merge as\
+	select * from test1 as a\
+	inner join test2 as b\
+	on a.AirportName=b.AirportName;\
+quit;	\
+\
+proc print data=merge (firstobs=1 obs=5);\
+run;\
+\
+data merged;\
+set merge;\
+diff=all_count-AN_count;\
+run;\
+\
+proc freq data=merged;\
+table diff;\
+run;\
+proc print data=merged;\
+where diff<>0;\
+run;\
+data final_check;\
+set merged;\
+if diff^=0 then Airport_Name=catx('_',AirportName,IATA);\
+else Airport_Name=AirportName;\
+run;\
+\
+proc freq data=final_check;\
+table Airport_Name;\
+where diff^=0;\
+run;\
+\
+/* Final Check */\
+proc sql;\
+  select count(distinct(IATA)) as Total_IATA, \
+         count(distinct(Airport_Name)) as Total_Names\
+  from final_check;\
+quit;\
+*Total_IATA:  3251\
+*Total_Names: 3251;\
+\
+proc sql;\
+  create table fullair_check as\
+  select * from fullair2 as a\
+  left join final_check as b\
+  on a.IATA=b.IATA;\
+quit;\
+proc contents data=fullair2; run;\
+*Rows: 37275 Cols:9;\
+proc contents data=final_check; run;\
+*Rows: 3251 Cols:6;\
+proc contents data=fullair_check; run;\
+*Rows: 37275 Cols:13;\
+\
+proc sql;\
+  select count(distinct(IATA)) as Total_Real, \
+         count(distinct(Airport_Name)) as Total_New\
+  from fullair_check;\
+quit;\
+\
+/********************************************************************/\
+/*** Step 3: Extract Region out of TzDatabaseTz, Calculate Counts ***/\
+/********************************************************************/\
+proc freq data=fullair_check;\
+table TzDatabaseTz;\
+run;\
+\
+data fullair3;\
+set fullair_check;\
+Region = scan(TzDatabaseTz, 1, '/');\
+if Region in ('\\N') then delete;\
+run;\
+proc freq data=fullair3;\
+table Region;\
+run;\
+proc contents data=fullair2; run;\
+*Rows: 37275;\
+proc contents data=fullair3; run;\
+*Rows: 36787;\
+\
+/*-------------------A. Airport Count-------------------*/\
+proc sql;\
+	create table AirportCounts as\
+	select IATA, count(IATA) as Airport_Count\
+	from fullair3\
+	group by IATA\
+	order by Airport_Count desc;\
+quit;\
+\
+proc sql;\
+	create table fullair3_v2 as\
+	select * from fullair3 as a\
+	left join AirportCounts as b\
+	on a.IATA=b.IATA;\
+quit;\
+\
+proc contents data=fullair3; run;\
+*Rows: 36787 Cols: 14;\
+proc contents data=AirportCounts; run;\
+*Rows: 3198 Cols: 2;\
+proc contents data=fullair3_v2; run;\
+*Rows: 36787 Cols: 15;\
+\
+/*-------------------B. Country Count-------------------*/\
+proc sql;\
+	create table CountryCounts as\
+	select Country, count(Country) as Country_Count\
+	from fullair3\
+	group by Country\
+	order by Country_Count desc;\
+quit;\
+\
+\
+proc sql;\
+	create table fullair3_v3 as\
+	select * from fullair3_v2 as a\
+	left join CountryCounts as b\
+	on a.Country=b.Country;\
+quit;\
+\
+\
+proc contents data=fullair3_v2; run;\
+*Rows: 36787 Cols: 15;\
+proc contents data=CountryCounts; run;\
+*Rows: 224 Cols: 2;\
+proc contents data=fullair3_v3; run;\
+*Rows: 36787 Cols: 16;\
+\
+\
+/*-------------------C. Region Count-------------------*/\
+proc sql;\
+	create table RegionCounts as\
+	select Region, count(Region) as Region_Count\
+	from fullair3\
+	group by Region\
+	order by Region_Count desc;\
+quit;\
+\
+\
+proc sql;\
+	create table fullair3_v4 as\
+	select * from fullair3_v3 as a\
+	left join RegionCounts as b\
+	on a.Region=b.Region;\
+quit;\
+\
+proc contents data=fullair3_v3; run;\
+*Rows: 36787 Cols: 16;\
+proc contents data=RegionCounts; run;\
+*Rows: 9 Cols: 2;\
+proc contents data=fullair3_v4; run;\
+*Rows: 36787 Cols: 17;\
+\
+\
+proc print data=fullair3_v4 (firstobs=1 obs=5);\
+run;\
+\
+\
+/***MACROS***/\
+/* 1. By Airport */\
+\
+%macro NumRoutes(IATA);\
+proc print data = fullair3_v4 (obs=1) noobs;\
+var AirportName IATA City Country Airport_Count;\
+where IATA= "&IATA";\
+run;\
+%mend;\
+\
+%NumRoutes(STL);\
+%NumRoutes(DCA);\
+%NumRoutes(IAD);\
+%NumRoutes(CDG);\
+%NumRoutes(ACV);\
+\
+/* 2. By Country */\
+%macro Country_NumRoutes(Country);\
+proc print data = fullair3_v4 (obs=1) noobs;\
+var Country Country_Count;\
+where Country= "&Country";\
+run;\
+%mend;\
+\
+%Country_NumRoutes(Canada);\
+%Country_NumRoutes(South Africa);\
+%Country_NumRoutes(Spain);\
+\
+/* 3. By Region */\
+%macro Region_NumRoutes(Region);\
+proc print data = fullair3_v4 (obs=1) noobs;\
+var Region Region_Count;\
+where Region= "&Region";\
+run;\
+%mend;\
+\
+%Region_NumRoutes(Asia);\
+%Region_NumRoutes(America);\
+%Region_NumRoutes(Africa);\
+\
+/* 4. Destinations by Airport */\
+%macro DestNumRoutes(IATA);\
+proc print data = fullair3_v4 noobs ;\
+var Dest_IATA;\
+where IATA= "&IATA";\
+run;\
+%mend;\
+\
+%DestNumRoutes(STL);\
+%DestNumRoutes(ACV);\
+}

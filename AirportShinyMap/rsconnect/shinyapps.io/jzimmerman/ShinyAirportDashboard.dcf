@@ -1,0 +1,12 @@
+name: ShinyAirportDashboard
+title: ShinyAirportDashboard
+username:
+account: jzimmerman
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2198331
+bundleId: 3499679
+url: https://jzimmerman.shinyapps.io/ShinyAirportDashboard/
+when: 1597108620.15166
+asMultiple: FALSE
+asStatic: FALSE

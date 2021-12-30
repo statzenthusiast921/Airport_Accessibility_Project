@@ -1,0 +1,12 @@
+name: AirportShinyMapFull
+title: AirportShinyMapFull
+username:
+account: jzimmerman
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2188994
+bundleId: 3067516
+url: https://jzimmerman.shinyapps.io/AirportShinyMapFull/
+when: 1587916680.94203
+asMultiple: FALSE
+asStatic: FALSE
