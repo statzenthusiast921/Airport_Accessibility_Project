@@ -2,4 +2,4 @@
 
 ### Description
 
-This was a simple project where I attempted to visualize all airports in the world.  This started as a Tableau dashboard in early 2020 and I eventually converted my work to an R Shiny app later in the year.
+The goal of this project was to examine the accessibility of continents, countries, and cities by visualizing where to find all airports in the world.  This started as a Tableau dashboard in early 2020 and I eventually converted my work to an R Shiny app later in the year.
