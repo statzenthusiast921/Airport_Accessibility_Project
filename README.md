@@ -15,4 +15,4 @@ I found all of my data for this analysis from the link [here](https://openflight
 
 ### Limitations
 
-These datasets are not exhaustive lists of every airport in the world.  Further, this data has not been updated since 2014, so certain routes that are currently available may not be reflected in this analysis.
+These datasets are not exhaustive lists of every airport in the world.  Further, the route data has not been updated since 2014, so certain routes that are currently available may not be reflected in this analysis.
