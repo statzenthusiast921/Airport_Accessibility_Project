@@ -11,3 +11,8 @@ I found all of my data for this analysis from the link [here](https://openflight
 
 - [All Airports](https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports-extended.dat)
 - [All Routes](https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat)
+
+
+### Limitations
+
+These datasets are not exhaustive lists of every airport in the world.  Further, this data has not been updated since 2014, so certain routes that are currently available may not be reflected in this analysis.
