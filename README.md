@@ -4,6 +4,10 @@
 
 The goal of this project was to examine the accessibility of continents, countries, and cities by visualizing where to find all airports in the world.  This started as a Tableau dashboard in early 2020 and I eventually converted my work to an R Shiny app later in the year.
 
+### Link
+
+[Airport Accessibility App](https://jzimmerman.shinyapps.io/ShinyAirportDashboard/?_ga=2.51698988.405763992.1661361035-2118574259.1661361035)
+
 
 ### Data
 
