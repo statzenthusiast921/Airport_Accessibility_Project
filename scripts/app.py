@@ -143,13 +143,16 @@ app.layout = html.Div([
                 dbc.Row([
                     dbc.Col([
                         dbc.Card(id='card1')
-                    ],width=4),
+                    ],width=3),
                     dbc.Col([
                         dbc.Card(id='card2')
-                    ],width=4),
+                    ],width=3),
                     dbc.Col([
                         dbc.Card(id='card3')
-                    ],width=4),
+                    ],width=3),
+                    dbc.Col([
+                        dbc.Card(id='card4')
+                    ],width=3),
                 ]),
                 dbc.Row([
                     dbc.Col([
@@ -215,6 +218,7 @@ def set_airport_options(selected_country):
     Output('card1', 'children'),
     Output('card2', 'children'),
     Output('card3', 'children'),
+    Output('card4', 'children'),
     Input('dropdown2', 'value')
 
 )
@@ -223,12 +227,16 @@ def airport_selection_stats(selected_airport):
     filtered = dest_tbl[dest_tbl["display_name"] == selected_airport]
     filtered_again = airport_df[airport_df['display_name'] == selected_airport]
 
-    #----- Grab first metric from airport_df
+    #----- Grab first 2 metrics from airport_df
     metric1 = filtered_again['num_dests'].unique()[0]
-    
+
+    diff_dests = filtered['dest_iata'].unique()
+    filtering_to_only_dests = airport_df[airport_df['iata'].isin(diff_dests)]
+    metric2 = len(filtering_to_only_dests['country'].unique())
+
     #----- Grab last 2 metrics from destination table
-    metric2 = round(filtered['Connectivity Index'].unique()[0],2)
-    metric3 = round(filtered['Redundancy Index'].unique()[0],2)
+    metric3 = round(filtered['Connectivity Index'].unique()[0],2)
+    metric4 = round(filtered['Redundancy Index'].unique()[0],2)
 
     airport_code = filtered_again['iata'].unique()[0]
 
@@ -268,11 +276,10 @@ def airport_selection_stats(selected_airport):
         "textAlign": "left"
     }
     )
-
     card2 = dbc.Card(
     dbc.CardBody([
         html.P(
-            f"Connectivity Index for {airport_code}",
+            f"# Countries Accessible from {airport_code}",
             style={
                 "margin": "0 0 8px 0",
                 "fontSize": "0.8rem",
@@ -308,7 +315,7 @@ def airport_selection_stats(selected_airport):
     card3 = dbc.Card(
     dbc.CardBody([
         html.P(
-            f"Redundancy Index for {airport_code}",
+            f"Connectivity Index for {airport_code}",
             style={
                 "margin": "0 0 8px 0",
                 "fontSize": "0.8rem",
@@ -341,7 +348,43 @@ def airport_selection_stats(selected_airport):
         "textAlign": "left"
     }
     )
-    return card1, card2, card3
+    card4 = dbc.Card(
+    dbc.CardBody([
+        html.P(
+            f"Redundancy Index for {airport_code}",
+            style={
+                "margin": "0 0 8px 0",
+                "fontSize": "0.8rem",
+                "fontWeight": "600",
+                "textTransform": "uppercase",
+                "letterSpacing": "1px",
+                "color": "rgba(255,255,255,0.8)"
+            }
+        ),
+        html.H2(
+            f"{metric4}",
+            style={
+                "margin": "0",
+                "fontSize": "2.4rem",
+                "fontWeight": "700",
+                "lineHeight": "1",
+                "color": "white"
+            }
+        )
+    ],
+    style={
+        "padding": "0.5rem 0.25rem"
+    }),
+    style={
+        "width": "100%",
+        "border": "none",
+        "borderRadius": "18px",
+        "background": "linear-gradient(135deg, #2E91E5 0%, #1B5FC1 100%)",
+        "boxShadow": "0 10px 24px rgba(46, 145, 229, 0.35)",
+        "textAlign": "left"
+    }
+    )
+    return card1, card2, card3, card4
 
 
 @app.callback(
@@ -483,7 +526,7 @@ def update_dest_table(selected_airport):
     joined = joined.rename(
         columns={
             'num_dests':'# Destinations',
-            'display_name_y':'City',
+            'display_name_y':'City (IATA), Country',
             'Destination':'Airport Name'
             }
         )
