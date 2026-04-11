@@ -23,12 +23,11 @@ dest_tbl = (
     )
 )
 
-# #-----Set up choices for dropdown menus
+# ----- Set up choices for dropdown menus
 country_choices = sorted(airport_df['country'].unique())
 airport_choices = sorted(airport_df['display_name'].unique())
-# pr_choices = sorted(amtrak_df['business_line'].unique())
 
-
+# ------ Define some functions for later use
 def great_circle_points(lat1, lon1, lat2, lon2, n=50):
     lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
     d = 2 * math.asin(math.sqrt(
@@ -48,7 +47,7 @@ def great_circle_points(lat1, lon1, lat2, lon2, n=50):
         lons.append(math.degrees(math.atan2(y, x)))
     return lats, lons
 
-
+# ----- Define Hover columns to be used in map over dots
 HOVER_COLS = ['latitude', 'longitude', 'display_name', 'num_dests', 'redundancy_score', 'connectivity_index']
 
 
@@ -174,11 +173,46 @@ app.layout = html.Div([
                 ])
             ]
         ),
-        dcc.Tab(label='something else on tab 2',value='tab-3',style=tab_style, selected_style=tab_selected_style,
+        dcc.Tab(label='Airline Metrics',value='tab-3',style=tab_style, selected_style=tab_selected_style,
             children=[
                 dbc.Row([
-        
-      
+                    dbc.Col([
+                        dbc.Label('Choose a country:'),
+                        dcc.Dropdown(
+                            id='dropdown3',
+                            style={'color':'black'},
+                            options=[{'label': i, 'value': i} for i in country_choices],
+                            value=country_choices[0]
+                        )
+                    ], width = 6),
+                    dbc.Col([
+                        dbc.Label('Choose an airport:'),
+                        dcc.Dropdown(
+                            id='dropdown4',
+                            style={'color':'black'},
+                            options=[{'label': i, 'value': i} for i in airport_choices],
+                            value=airport_choices[0]
+                        )
+                    ], width = 6)
+                ]),
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card(id='card5')
+                    ],width=4),
+                    dbc.Col([
+                        dbc.Card(id='card6')
+                    ],width=4),
+                    dbc.Col([
+                        dbc.Card(id='card7')
+                    ],width=4),
+                ]),
+                dbc.Row([
+                    dbc.Col([
+                        dcc.Graph(id='dominant_airline_by_country_map')
+                    ], width = 6),
+                    dbc.Col([
+                        dcc.Graph(id='airline_treemap')
+                    ], width = 6)
                 ])
             ]
         ),
@@ -203,6 +237,10 @@ app.layout = html.Div([
         )
     ])
 ])
+
+# ------------------------------------------- #
+# ------ Tab #2: Route Map by Airports ------ #
+# ------------------------------------------- #
 
 @app.callback(
     Output('dropdown2', 'options'), #--> filter airports
@@ -541,6 +579,121 @@ def update_dest_table(selected_airport):
     cols = [{"name": c, "id": c} for c in joined.columns]
     return joined.to_dict("records"), cols, 0
 
+# ----------------------------------- #
+# ----- Tab #3: Airline Metrics ----- #
+# ----------------------------------- #
+
+@app.callback(
+    Output('dropdown4', 'options'), #--> filter airports
+    Output('dropdown4', 'value'),
+    Input('dropdown3', 'value') #--> choose counry
+)
+def set_airport_options(selected_country):
+    return [{'label': i, 'value': i} for i in country_airport_dict[selected_country]], country_airport_dict[selected_country][0],
+
+
+@app.callback(
+    Output('airline_treemap', 'figure'),
+    Input('dropdown4', 'value'),
+)
+def airline_treemap_chart(selected_airport):
+
+    airport = airport_df[airport_df["display_name"] == selected_airport][["iata", "dest_iata", "carriers"]]
+    airport["airline_names"] = airport["carriers"].apply(
+        lambda x: list({carrier["name"] for carrier in x})
+    )
+
+    airport_exploded = airport.explode("airline_names")
+    airport_exploded = airport.explode("airline_names").dropna(subset=["airline_names"])
+
+    fig = px.treemap(
+        airport_exploded,
+        path=["airline_names", "dest_iata"],
+        title=f"{selected_airport} Routes by Airline"
+    )
+    return fig
+
+@app.callback(
+    Output('dominant_airline_by_country_map', 'figure'),
+    Input('dropdown3', 'value'),
+)
+def dominant_airline_by_country_map(selected_country):
+    country_filtered = airport_df[airport_df['country']==selected_country]
+
+    country_filtered["airline_names"] = country_filtered["carriers"].apply(
+            lambda x: list({carrier["name"] for carrier in x})
+        )
+
+    airport_exploded = country_filtered.explode("airline_names")
+    airport_exploded = country_filtered.explode("airline_names").dropna(subset=["airline_names"])
+    airport_exploded = airport_exploded[
+        ['city_name','country','display_name','iata','airline_names',
+        'latitude','longitude']
+    ]
+
+    unique_airlines_per_city = (
+    airport_exploded.groupby("city_name")["airline_names"]
+      .nunique()
+      .reset_index(name="unique_airline_count")
+    )
+
+    counts = (
+    airport_exploded.groupby(["city_name", "airline_names"])
+      .size()
+      .reset_index(name="flight_count")
+    )
+
+    counts["city_total"] = counts.groupby("city_name")["flight_count"].transform("sum")
+    counts["pct_share"] = counts["flight_count"] / counts["city_total"]
+ 
+    dominant_airline = (
+    counts.loc[counts.groupby("city_name")["pct_share"].idxmax()]
+          .reset_index(drop=True)
+          .rename(columns={"airline_names": "dominant_airline"})
+    )
+    dominant_airline = dominant_airline[['city_name','dominant_airline','pct_share']]
+
+    country_airline_mapping_df = pd.merge(
+        country_filtered,
+        dominant_airline,
+        on = 'city_name',
+        how = 'left'
+    )
+    country_airline_mapping_df = country_airline_mapping_df[
+        ['city_name','display_name','iata',
+        'latitude','longitude','dominant_airline','pct_share']]
+    country_airline_mapping_df = country_airline_mapping_df.drop_duplicates()
+
+    country_airline_mapping_df["latitude"] = pd.to_numeric(
+        country_airline_mapping_df["latitude"], errors="coerce"
+    )
+
+    country_airline_mapping_df["longitude"] = pd.to_numeric(
+        country_airline_mapping_df["longitude"], errors="coerce"
+    )
+
+    country_airline_mapping_df = country_airline_mapping_df.dropna(
+    subset=["latitude", "longitude"]
+    )
+
+
+    fig = px.scatter_mapbox(
+        country_airline_mapping_df,
+        lat="latitude",
+        lon="longitude",
+        hover_name="display_name",
+        hover_data=["city_name","iata","dominant_airline","pct_share"],
+        color="dominant_airline",
+        size = 'pct_share',
+        color_continuous_scale="Viridis",
+        zoom=3,
+        height=500,
+    )
+    fig.update_layout(
+        mapbox_style="open-street-map",
+        margin=dict(l=10, r=10, t=30, b=10)
+    )
+    return fig
 
 if __name__=='__main__':
 	app.run()
