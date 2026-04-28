@@ -12,6 +12,10 @@ import math
 #-----Read in and set up data
 airport_df = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/master_air.parquet')
 
+graph1 = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_airline_airport.parquet')
+airport_df_join = airport_df[['iata','country','display_name']].drop_duplicates()
+airport_df_join.rename(columns={'iata':'airport'}, inplace=True)
+graph1_merged = pd.merge(graph1, airport_df_join, on ='airport')
 
 dest_tbl = (
     airport_df[["display_name", "dest_name",'dest_iata', "connectivity_index", "redundancy_score"]].rename(
@@ -26,6 +30,7 @@ dest_tbl = (
 # ----- Set up choices for dropdown menus
 country_choices = sorted(airport_df['country'].unique())
 airport_choices = sorted(airport_df['display_name'].unique())
+connection_type_choices = ['Similarity','Carriers','Proximity','etc']
 
 # ------ Define some functions for later use
 def great_circle_points(lat1, lon1, lat2, lon2, n=None):
@@ -330,7 +335,7 @@ app.layout = html.Div([
                                     style={'marginBottom': '6px', 'fontWeight': '600'}
                                 ),
                                 dcc.Dropdown(
-                                    id='heatmap_airline_dropdown',
+                                    id='dropdown5',
                                     style={'color': 'black'},
                                     clearable=False
                                 )
@@ -362,13 +367,25 @@ app.layout = html.Div([
             children=[
                 dbc.Row([
                     dbc.Col([
-                
+                        dbc.Label('Choose a connection type:'),
+                        dcc.Dropdown(
+                            id='dropdown6',
+                            style={'color':'black'},
+                            options=[{'label': i, 'value': i} for i in connection_type_choices],
+                            value=connection_type_choices[0]
+                        )
                     ], width =6),
                     dbc.Col([
-                
+                        dbc.Label('Choose a country:'),
+                        dcc.Dropdown(
+                            id='dropdown7',
+                            style={'color':'black'},
+                            options=[{'label': i, 'value': i} for i in country_choices],
+                            value=country_choices[0]
+                        )
                     ], width =6),
                     dbc.Col([
-             
+                        dcc.Graph(id = 'network_chart')
                     ], width = 12),
                
             
@@ -853,12 +870,12 @@ def build_heat_colorscale(hex_color):
 
 
 @app.callback(
-    Output('heatmap_airline_dropdown', 'options'),
-    Output('heatmap_airline_dropdown', 'value'),
+    Output('dropdown5', 'options'),
+    Output('dropdown5', 'value'),
     Output('heatmap_airline_control', 'style'),
     Input('dropdown3', 'value'),
     Input('airline_map_mode', 'value'),
-    State('heatmap_airline_dropdown', 'value'),
+    State('dropdown5', 'value'),
 )
 def update_heatmap_airline_control(selected_country, map_mode, current_airline):
     prepared_country_data = prepare_country_airline_data(selected_country)
@@ -877,7 +894,7 @@ def update_heatmap_airline_control(selected_country, map_mode, current_airline):
     Output('dominant_airline_by_country_map', 'figure'),
     Input('dropdown3', 'value'),
     Input('airline_map_mode', 'value'),
-    Input('heatmap_airline_dropdown', 'value'),
+    Input('dropdown5', 'value'),
 )
 def dominant_airline_by_country_map(selected_country, map_mode, selected_airline):
     country_airline_mapping_df, airport_airline_share_df, top_airlines = prepare_country_airline_data(selected_country)
@@ -926,8 +943,10 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
             coloraxis_colorbar=dict(
                 title="% Share",
                 tickformat=".0%",
-                bgcolor="rgba(0,0,0,0)",
+                bgcolor="black",
                 bordercolor="rgba(0,0,0,0)",
+                tickfont=dict(color="white"),
+                #titlefont=dict(color="white"),
             ),
             margin=dict(l=0, r=0, t=0, b=0)
         )
