@@ -9,13 +9,23 @@ from dash.dependencies import Input, Output, State
 from dash import dash_table
 import plotly.graph_objects as go
 import math
+import visdcc
+
 #-----Read in and set up data
 airport_df = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/master_air.parquet')
 
 graph1 = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_airline_airport.parquet')
-airport_df_join = airport_df[['iata','country','display_name']].drop_duplicates()
-airport_df_join.rename(columns={'iata':'airport'}, inplace=True)
-graph1_merged = pd.merge(graph1, airport_df_join, on ='airport')
+airport_df1 = airport_df[['iata','country','display_name']].drop_duplicates()
+airport_df1.rename(columns={'iata':'airport'}, inplace=True)
+graph1_merged = pd.merge(graph1, airport_df1, on ='airport')
+
+
+graph2 = pd.read_parquet("https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_feature_similarity.parquet")
+airport_df2 = airport_df[['country','iata']]
+airport_df2 = airport_df2.rename(columns={'country':'source_country','iata':'source'})
+graph2_merged = pd.merge(graph2, airport_df2, on = 'source')
+airport_df2 = airport_df2.rename(columns={'source_country':'target_country','source':'target'})
+graph2_merged = pd.merge(graph2_merged, airport_df2, on = 'target')
 
 dest_tbl = (
     airport_df[["display_name", "dest_name",'dest_iata', "connectivity_index", "redundancy_score"]].rename(
@@ -30,7 +40,7 @@ dest_tbl = (
 # ----- Set up choices for dropdown menus
 country_choices = sorted(airport_df['country'].unique())
 airport_choices = sorted(airport_df['display_name'].unique())
-connection_type_choices = ['Similarity','Carriers','Proximity','etc']
+connection_type_choices = ['Carriers','Similarity','Proximity','etc']
 
 # ------ Define some functions for later use
 def great_circle_points(lat1, lon1, lat2, lon2, n=None):
@@ -385,11 +395,8 @@ app.layout = html.Div([
                         )
                     ], width =6),
                     dbc.Col([
-                        dcc.Graph(id = 'network_chart')
+                        html.Div(id='network_chart')                    
                     ], width = 12),
-               
-            
-                    
 
                 ])
             ]
@@ -940,16 +947,22 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
         )
         fig.update_layout(
             mapbox_style="carto-darkmatter",
+            paper_bgcolor="black",
+            plot_bgcolor="black",
             coloraxis_colorbar=dict(
-                title="% Share",
+                title=dict(
+                    text = "% Share",
+                    font=dict(color="white")
+ 
+                ),
                 tickformat=".0%",
                 bgcolor="black",
                 bordercolor="rgba(0,0,0,0)",
                 tickfont=dict(color="white"),
-                #titlefont=dict(color="white"),
             ),
             margin=dict(l=0, r=0, t=0, b=0)
         )
+
         return fig
 
     fig = px.scatter_mapbox(
@@ -998,5 +1011,177 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
     )
     return fig
 
+# ----------------------------------- #
+# ------- Tab #4: Connections ------- #
+# ----------------------------------- #
+
+
+@app.callback(
+    Output('network_chart', 'children'),
+    Input('dropdown6', 'value'),
+    Input('dropdown7', 'value'),
+)
+def network_connections(connection_type, selected_country):
+
+    if connection_type == "Carriers":
+
+        filtered_graph = graph1_merged[graph1_merged['country'] == selected_country]
+
+        if filtered_graph.empty:
+            return html.Div("No data available for this selection")
+
+        # ---- Optional: reduce noise (top airlines only)
+        top_airlines = (
+            filtered_graph['airline']
+            .value_counts()
+            .head(15)
+            .index
+        )
+        filtered_graph = filtered_graph[filtered_graph['airline'].isin(top_airlines)]
+
+        airlines = filtered_graph['airline'].unique()
+        airports = filtered_graph['airport'].unique()
+
+        nodes = []
+        edges = []
+
+        # Airline nodes
+        for airline in airlines:
+            nodes.append({
+                "id": airline,
+                "label": airline,
+                "color": "#4F81BD",
+                "shape": "dot",
+                "size": 18,
+                "group": "airline"
+            })
+
+        # Airport nodes
+        for airport in airports:
+            nodes.append({
+                "id": airport,
+                "label": airport,
+                "color": "#F39C12",
+                "shape": "dot",
+                "size": 10,
+                "group": "airport"
+            })
+
+        # Edges
+        for _, row in filtered_graph.iterrows():
+            edges.append({
+                "from": row["airline"],
+                "to": row["airport"]
+            })
+
+        return visdcc.Network(
+            id='network',
+            data={"nodes": nodes, "edges": edges},
+            options={
+                "height": "900px",
+                "width": "100%",
+                "physics": {
+                    "enabled": True,
+                    "stabilization": {"iterations": 100}
+                },
+                "layout": {
+                    "hierarchical": {
+                        "enabled": True,
+                        "direction": "LR",
+                        "sortMethod": "hubsize"
+                    }
+                },
+                "interaction": {
+                    "hover": True,
+                    "navigationButtons": True
+                },
+                "nodes": {"font": {"size": 12}},
+                "edges": {"color": "#999999"}
+            }
+        )
+
+    elif connection_type == "Similarity":
+
+        filtered = graph2_merged[graph2_merged['source_country'] == selected_country]
+
+        if filtered.empty:
+            return html.Div("No similarity data available for this selection")
+
+        # ---- Filter weak edges (VERY important for readability)
+        filtered = filtered[filtered["weight"] > filtered["weight"].quantile(0.75)]
+        filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].max()
+
+        # Limit graph size to avoid hairballs
+        MAX_NODES = 25
+        MAX_EDGES = 150
+
+        top_nodes = (
+            pd.concat([filtered["source"], filtered["target"]])
+            .value_counts()
+            .head(MAX_NODES)
+            .index
+        )
+        filtered = filtered.sort_values("weight", ascending=False).head(MAX_EDGES)
+        
+        node_ids = set(filtered["source"]).union(set(filtered["target"]))
+
+        nodes = []
+        edges = []
+
+        # Build nodes (uniform style for clarity)
+        for node in node_ids:
+            nodes.append({
+                "id": node,
+                "label": node,
+                "shape": "dot",
+                "size": 10,
+                "color": "#4F81BD"
+            })
+
+        # Build edges with weight scaling
+        for _, row in filtered.iterrows():
+            edges.append({
+                "from": row["source"],
+                "to": row["target"],
+                "width": max(1, row["weight"] * 8),
+                "title": f"Weight: {row['weight']:.3f}",
+                "color": {
+                    "color": "#999999",
+                    "opacity": 0.6
+                }
+            })
+
+        return visdcc.Network(
+            id='network',
+            data={"nodes": nodes, "edges": edges},
+            options={
+                "height": "900px",
+                "width": "100%",
+                "physics": {
+                    "enabled": True,
+                    "stabilization": {"iterations": 200}
+                },
+                "nodes": {
+                    "font": {"size": 12}
+                },
+                "edges": {
+                    "smooth": {"type": "continuous"}
+                },
+                "interaction": {
+                    "hover": True,
+                    "navigationButtons": True
+                }
+            }
+        )
+
+    # -----------------------------
+    # 3. FALLBACK
+    # -----------------------------
+    return html.Div("Select a valid connection type")
+
+
+
+
 if __name__=='__main__':
-	app.run()
+	#app.run()    
+    app.run(port=8051)
