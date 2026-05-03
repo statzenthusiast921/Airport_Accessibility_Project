@@ -14,18 +14,94 @@ import visdcc
 #-----Read in and set up data
 airport_df = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/master_air.parquet')
 
+# One lookup for IATA → country (avoid huge merge joins on edge tables with hundreds of thousands of rows).
+IATA_TO_COUNTRY = (
+    airport_df.drop_duplicates(subset=["iata"])
+    .set_index("iata")["country"]
+)
+
+
+def attach_country_columns_to_edges(edges_df):
+    """Add source_country / target_country via map (faster than merge on large frames)."""
+    out = edges_df.copy()
+    out["source_country"] = out["source"].map(IATA_TO_COUNTRY)
+    out["target_country"] = out["target"].map(IATA_TO_COUNTRY)
+    return out
+
+
 graph1 = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_airline_airport.parquet')
 airport_df1 = airport_df[['iata','country','display_name']].drop_duplicates()
 airport_df1.rename(columns={'iata':'airport'}, inplace=True)
 graph1_merged = pd.merge(graph1, airport_df1, on ='airport')
 
 
+def build_airline_iata_to_name(airport_df):
+    """Map 2-letter IATA airline codes to carrier names from route records."""
+    mapping = {}
+    for carriers in airport_df["carriers"].dropna():
+        if not isinstance(carriers, (list, tuple, np.ndarray)):
+            continue
+        for c in carriers:
+            if not isinstance(c, dict):
+                continue
+            code = c.get("iata") or c.get("IATA") or c.get("airline_iata") or c.get("code")
+            name = c.get("name")
+            if code and name:
+                code = str(code).strip().upper()
+                if len(code) == 2:
+                    mapping[code] = name
+    return mapping
+
+
+AIRLINE_IATA_TO_NAME = build_airline_iata_to_name(airport_df)
+AIRPORT_IATA_META = (
+    airport_df.drop_duplicates(subset=["iata"])
+    .set_index("iata")[["display_name", "country"]]
+    .to_dict("index")
+)
+
+
 graph2 = pd.read_parquet("https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_feature_similarity.parquet")
-airport_df2 = airport_df[['country','iata']]
-airport_df2 = airport_df2.rename(columns={'country':'source_country','iata':'source'})
-graph2_merged = pd.merge(graph2, airport_df2, on = 'source')
-airport_df2 = airport_df2.rename(columns={'source_country':'target_country','source':'target'})
-graph2_merged = pd.merge(graph2_merged, airport_df2, on = 'target')
+graph2_merged = attach_country_columns_to_edges(graph2)
+
+graph3 = pd.read_parquet("https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_proximity.parquet")
+graph3_merged = attach_country_columns_to_edges(graph3)
+
+# Upper bound used when building edges_proximity.parquet (great-circle miles).
+PROXIMITY_EDGE_MAX_MILES = 250.0
+
+SHARED_DESTINATIONS_PARQUET_URL = (
+    "https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/"
+    "edges_shared_destinations.parquet"
+)
+
+SHARED_DESTINATIONS_COSINE_PARQUET_URL = (
+    "https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/"
+    "edges_shared_destinations_cosine.parquet"
+)
+
+# Loaded on first use only (large tables); keeps app startup responsive.
+merged_shared_destinations_edges = None
+merged_shared_destinations_cosine_edges = None
+
+
+def load_merged_shared_destinations_edges():
+    """Load shared-destination edges once; subsequent calls reuse the same DataFrame."""
+    global merged_shared_destinations_edges
+    if merged_shared_destinations_edges is None:
+        raw = pd.read_parquet(SHARED_DESTINATIONS_PARQUET_URL)
+        merged_shared_destinations_edges = attach_country_columns_to_edges(raw)
+    return merged_shared_destinations_edges
+
+
+def load_merged_shared_destinations_cosine_edges():
+    """Load cosine-weighted shared-destination edges once; subsequent calls reuse the same DataFrame."""
+    global merged_shared_destinations_cosine_edges
+    if merged_shared_destinations_cosine_edges is None:
+        raw = pd.read_parquet(SHARED_DESTINATIONS_COSINE_PARQUET_URL)
+        merged_shared_destinations_cosine_edges = attach_country_columns_to_edges(raw)
+    return merged_shared_destinations_cosine_edges
+
 
 dest_tbl = (
     airport_df[["display_name", "dest_name",'dest_iata', "connectivity_index", "redundancy_score"]].rename(
@@ -40,7 +116,13 @@ dest_tbl = (
 # ----- Set up choices for dropdown menus
 country_choices = sorted(airport_df['country'].unique())
 airport_choices = sorted(airport_df['display_name'].unique())
-connection_type_choices = ['Carriers','Similarity','Proximity','etc']
+connection_type_choices = [
+    "Carriers",
+    "Similarity",
+    "Proximity",
+    "Shared destinations",
+    "Shared dest. (cosine)",
+]
 
 # ------ Define some functions for later use
 def great_circle_points(lat1, lon1, lat2, lon2, n=None):
@@ -101,6 +183,8 @@ METRIC_CARD_STYLE = {
     "boxShadow": "0 10px 24px rgba(46, 145, 229, 0.35)",
     "textAlign": "left"
 }
+
+LABEL_STYLE_WHITE = {"color": "#f4f6fb", "fontWeight": "600"}
 
 
 def build_metric_card_body(title, value, font_size="1.8rem"):
@@ -375,30 +459,74 @@ app.layout = html.Div([
         ),
         dcc.Tab(label='Connections',value='tab-4',style=tab_style, selected_style=tab_selected_style,
             children=[
+                dcc.Store(id='network-node-meta', data={}),
                 dbc.Row([
                     dbc.Col([
-                        dbc.Label('Choose a connection type:'),
+                        dbc.Card(id='conn-card1', style=METRIC_CARD_STYLE)
+                    ], width=3),
+                    dbc.Col([
+                        dbc.Card(id='conn-card2', style=METRIC_CARD_STYLE)
+                    ], width=3),
+                    dbc.Col([
+                        dbc.Card(id='conn-card3', style=METRIC_CARD_STYLE)
+                    ], width=3),
+                    dbc.Col([
+                        dbc.Card(id='conn-card4', style=METRIC_CARD_STYLE)
+                    ], width=3),
+                ]),
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Label("Choose a connection type:", style=LABEL_STYLE_WHITE),
                         dcc.Dropdown(
                             id='dropdown6',
                             style={'color':'black'},
                             options=[{'label': i, 'value': i} for i in connection_type_choices],
                             value=connection_type_choices[0]
                         )
-                    ], width =6),
+                    ], width=6),
                     dbc.Col([
-                        dbc.Label('Choose a country:'),
+                        dbc.Label("Choose a country:", style=LABEL_STYLE_WHITE),
                         dcc.Dropdown(
                             id='dropdown7',
                             style={'color':'black'},
                             options=[{'label': i, 'value': i} for i in country_choices],
                             value=country_choices[0]
                         )
-                    ], width =6),
+                    ], width=6),
+                ]),
+                dbc.Row([
                     dbc.Col([
-                        html.Div(id='network_chart')                    
-                    ], width = 12),
-
-                ])
+                        html.P(
+                            "Tip: use the network toolbar to zoom and fit. "
+                            "“Shared dest. (cosine)” down-weights mega-hubs so overlap is easier to compare.",
+                            style={
+                                "color": "rgba(244,246,251,0.82)",
+                                "fontSize": "0.88rem",
+                                "marginTop": "4px",
+                                "marginBottom": "12px",
+                            },
+                        )
+                    ], width=12),
+                ]),
+                dbc.Row([
+                    dbc.Col([
+                        html.Div(id='network_chart')
+                    ], width=8),
+                    dbc.Col([
+                        html.Div(
+                            id='network-node-detail',
+                            style={
+                                "background": "rgba(255,255,255,0.09)",
+                                "borderRadius": "12px",
+                                "padding": "16px 18px",
+                                "minHeight": "320px",
+                                "color": "#f4f6fb",
+                                "border": "1px solid rgba(255,255,255,0.12)",
+                                "lineHeight": "1.45",
+                            }
+                        )
+                    ], width=4),
+                ]),
             ]
         )
     ])
@@ -1015,20 +1143,103 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
 # ------- Tab #4: Connections ------- #
 # ----------------------------------- #
 
+# vis-network defaults use gray node labels; white + subtle stroke reads better on dark surfaces.
+NETWORK_NODE_FONT = {
+    "size": 13,
+    "multi": True,
+    "color": "#ffffff",
+    "strokeWidth": 2,
+    "strokeColor": "#080a0d",
+    "face": "system-ui, -apple-system, 'Segoe UI', sans-serif",
+}
+
+NETWORK_CHART_SURFACE = {
+    "backgroundColor": "#12151c",
+    "borderRadius": "12px",
+    "padding": "6px",
+    "border": "1px solid rgba(255, 255, 255, 0.12)",
+    "minHeight": "520px",
+}
+
+NETWORK_EMPTY_STYLE = {"color": "#e8ecf4", "padding": "20px", "fontSize": "1rem"}
+
+
+def wrap_network_chart(net):
+    return html.Div([net], style=NETWORK_CHART_SURFACE)
+
+
+def airport_network_display_label(iata):
+    meta = AIRPORT_IATA_META.get(iata) or {}
+    name = meta.get("display_name") or iata
+    return name if name == iata else f"{name}\n({iata})"
+
+
+def carrier_network_physics_options():
+    return {
+        "height": "900px",
+        "width": "100%",
+        "layout": {"hierarchical": {"enabled": False}},
+        "physics": {
+            "enabled": True,
+            "solver": "barnesHut",
+            "barnesHut": {
+                "gravitationalConstant": -28000,
+                "centralGravity": 0.25,
+                "springLength": 240,
+                "springConstant": 0.012,
+                "damping": 0.62,
+                "avoidOverlap": 0.55,
+            },
+            "maxVelocity": 22,
+            "minVelocity": 0.4,
+            "stabilization": {"enabled": True, "iterations": 220, "updateInterval": 30},
+        },
+        "interaction": {
+            "hover": True,
+            "navigationButtons": True,
+            "dragNodes": True,
+            "dragView": True,
+            "zoomView": True,
+            "tooltipDelay": 100,
+        },
+        "nodes": {
+            "font": NETWORK_NODE_FONT,
+        },
+        "edges": {
+            "color": {"color": "#9dabc4", "opacity": 0.85},
+            "smooth": {"type": "continuous", "roundness": 0.35},
+        },
+    }
+
 
 @app.callback(
     Output('network_chart', 'children'),
+    Output('network-node-meta', 'data'),
+    Output('conn-card1', 'children'),
+    Output('conn-card2', 'children'),
+    Output('conn-card3', 'children'),
+    Output('conn-card4', 'children'),
     Input('dropdown6', 'value'),
     Input('dropdown7', 'value'),
 )
 def network_connections(connection_type, selected_country):
+    empty_cards = (
+        build_metric_card_body("Connection view", "—"),
+        build_metric_card_body("Nodes", "—"),
+        build_metric_card_body("Links", "—"),
+        build_metric_card_body("Detail", "—"),
+    )
 
     if connection_type == "Carriers":
 
         filtered_graph = graph1_merged[graph1_merged['country'] == selected_country]
 
         if filtered_graph.empty:
-            return html.Div("No data available for this selection")
+            return (
+                html.Div("No data available for this selection", style=NETWORK_EMPTY_STYLE),
+                {},
+                *empty_cards,
+            )
 
         # ---- Optional: reduce noise (top airlines only)
         top_airlines = (
@@ -1044,140 +1255,705 @@ def network_connections(connection_type, selected_country):
 
         nodes = []
         edges = []
+        node_meta = {}
 
-        # Airline nodes
+        # Airline nodes (blue): show airline name when known; FG/FZ are IATA airline codes.
         for airline in airlines:
+            legal_name = AIRLINE_IATA_TO_NAME.get(airline)
+            label = legal_name if legal_name else airline
+            hover_title = (
+                f"{legal_name or 'Unknown name'}\n"
+                f"IATA airline code: {airline}\n"
+                "Orange nodes are airports in this country."
+            )
+            ap_codes = sorted(filtered_graph.loc[filtered_graph["airline"] == airline, "airport"].unique())
+            ap_lines = []
+            for code in ap_codes[:40]:
+                m = AIRPORT_IATA_META.get(code) or {}
+                disp = m.get("display_name") or code
+                ap_lines.append(f"{disp} ({code})")
+            node_meta[airline] = {
+                "kind": "airline",
+                "name": legal_name or "—",
+                "iata": airline,
+                "airport_count": len(ap_codes),
+                "airports": ap_lines,
+            }
             nodes.append({
                 "id": airline,
-                "label": airline,
+                "label": label,
+                "title": hover_title,
                 "color": "#4F81BD",
                 "shape": "dot",
-                "size": 18,
-                "group": "airline"
+                "size": 20,
+                "group": "airline",
             })
 
-        # Airport nodes
+        # Airport nodes (orange)
         for airport in airports:
+            ap_meta = AIRPORT_IATA_META.get(airport) or {}
+            disp = ap_meta.get("display_name") or airport
+            al_codes = sorted(filtered_graph.loc[filtered_graph["airport"] == airport, "airline"].unique())
+            al_labels = []
+            for ac in al_codes:
+                nm = AIRLINE_IATA_TO_NAME.get(ac)
+                al_labels.append(f"{nm} ({ac})" if nm else str(ac))
+            node_meta[airport] = {
+                "kind": "airport",
+                "name": disp,
+                "iata": airport,
+                "country": ap_meta.get("country") or selected_country,
+                "airline_count": len(al_codes),
+                "airlines": al_labels,
+            }
             nodes.append({
                 "id": airport,
-                "label": airport,
+                "label": airport_network_display_label(airport),
+                "title": (
+                    f"{disp}\n"
+                    f"IATA: {airport}\n"
+                    f"{ap_meta.get('country') or selected_country}"
+                ),
                 "color": "#F39C12",
                 "shape": "dot",
-                "size": 10,
-                "group": "airport"
+                "size": 12,
+                "group": "airport",
             })
 
-        # Edges
         for _, row in filtered_graph.iterrows():
             edges.append({
                 "from": row["airline"],
-                "to": row["airport"]
+                "to": row["airport"],
+                "title": f"{row['airline']} → {row['airport']}",
             })
 
-        return visdcc.Network(
-            id='network',
-            data={"nodes": nodes, "edges": edges},
-            options={
-                "height": "900px",
-                "width": "100%",
-                "physics": {
-                    "enabled": True,
-                    "stabilization": {"iterations": 100}
-                },
-                "layout": {
-                    "hierarchical": {
-                        "enabled": True,
-                        "direction": "LR",
-                        "sortMethod": "hubsize"
-                    }
-                },
-                "interaction": {
-                    "hover": True,
-                    "navigationButtons": True
-                },
-                "nodes": {"font": {"size": 12}},
-                "edges": {"color": "#999999"}
-            }
+        n_airlines = len(airlines)
+        n_airports = len(airports)
+        n_edges = len(edges)
+        hub = (
+            filtered_graph["airport"].value_counts().idxmax()
+            if n_edges else "—"
         )
+        hub_name = (AIRPORT_IATA_META.get(hub) or {}).get("display_name") or hub
+
+        cards = (
+            build_metric_card_body(f"Carriers · {selected_country}", f"{n_airlines} airlines (top)"),
+            build_metric_card_body("Airports in view", n_airports),
+            build_metric_card_body("Airport–airline links", n_edges),
+            build_metric_card_body("Busiest airport (links)", hub_name),
+        )
+
+        net = visdcc.Network(
+            id='network',
+            selection={"nodes": [], "edges": []},
+            data={"nodes": nodes, "edges": edges},
+            options=carrier_network_physics_options(),
+        )
+
+        return wrap_network_chart(net), node_meta, *cards
 
     elif connection_type == "Similarity":
 
         filtered = graph2_merged[graph2_merged['source_country'] == selected_country]
 
         if filtered.empty:
-            return html.Div("No similarity data available for this selection")
+            return (
+                html.Div("No similarity data available for this selection", style=NETWORK_EMPTY_STYLE),
+                {},
+                *empty_cards,
+            )
 
         # ---- Filter weak edges (VERY important for readability)
         filtered = filtered[filtered["weight"] > filtered["weight"].quantile(0.75)]
         filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].max()
 
-        # Limit graph size to avoid hairballs
-        MAX_NODES = 25
         MAX_EDGES = 150
 
-        top_nodes = (
-            pd.concat([filtered["source"], filtered["target"]])
-            .value_counts()
-            .head(MAX_NODES)
-            .index
-        )
         filtered = filtered.sort_values("weight", ascending=False).head(MAX_EDGES)
-        
+
         node_ids = set(filtered["source"]).union(set(filtered["target"]))
 
         nodes = []
         edges = []
+        node_meta = {}
 
-        # Build nodes (uniform style for clarity)
         for node in node_ids:
+            m = AIRPORT_IATA_META.get(node) or {}
+            disp = m.get("display_name") or node
+            ct = m.get("country", "—")
+            node_meta[node] = {
+                "kind": "airport",
+                "name": disp,
+                "iata": node,
+                "country": ct,
+                "airport_count": None,
+                "airports": [],
+                "airline_count": None,
+                "airlines": [],
+            }
             nodes.append({
                 "id": node,
-                "label": node,
+                "label": airport_network_display_label(node),
+                "title": f"{disp}\nIATA: {node}\n{ct}",
                 "shape": "dot",
-                "size": 10,
-                "color": "#4F81BD"
+                "size": 12,
+                "color": "#4F81BD",
             })
 
-        # Build edges with weight scaling
+        max_w = float(filtered["weight"].max()) if len(filtered) else 1.0
         for _, row in filtered.iterrows():
             edges.append({
                 "from": row["source"],
                 "to": row["target"],
-                "width": max(1, row["weight"] * 8),
-                "title": f"Weight: {row['weight']:.3f}",
+                "width": max(1, row["weight"] / max_w * 10),
+                "title": f"Similarity weight: {row['weight']:.3f}",
                 "color": {
-                    "color": "#999999",
-                    "opacity": 0.6
+                    "color": "#c5cedd",
+                    "opacity": 0.78
                 }
             })
 
-        return visdcc.Network(
+        mean_w = round(float(filtered["weight"].mean()), 3) if len(filtered) else "—"
+        cards = (
+            build_metric_card_body(f"Similarity · {selected_country}", f"{len(node_ids)} airports"),
+            build_metric_card_body("Similarity links (shown)", len(edges)),
+            build_metric_card_body("Mean edge weight", mean_w),
+            build_metric_card_body("Strongest link", round(float(filtered["weight"].iloc[0]), 3) if len(filtered) else "—"),
+        )
+
+        net = visdcc.Network(
             id='network',
+            selection={"nodes": [], "edges": []},
             data={"nodes": nodes, "edges": edges},
             options={
                 "height": "900px",
                 "width": "100%",
+                "layout": {"hierarchical": {"enabled": False}},
                 "physics": {
                     "enabled": True,
-                    "stabilization": {"iterations": 200}
+                    "solver": "barnesHut",
+                    "barnesHut": {
+                        "gravitationalConstant": -20000,
+                        "springLength": 180,
+                        "springConstant": 0.02,
+                        "damping": 0.58,
+                    },
+                    "stabilization": {"iterations": 200},
                 },
                 "nodes": {
-                    "font": {"size": 12}
+                    "font": NETWORK_NODE_FONT,
                 },
                 "edges": {
-                    "smooth": {"type": "continuous"}
+                    "smooth": {"type": "continuous", "roundness": 0.35}
                 },
                 "interaction": {
                     "hover": True,
-                    "navigationButtons": True
+                    "navigationButtons": True,
+                    "dragNodes": True,
+                    "dragView": True,
+                    "zoomView": True,
+                    "tooltipDelay": 100,
                 }
             }
         )
 
+        return wrap_network_chart(net), node_meta, *cards
+
+    elif connection_type == "Proximity":
+    
+        filtered = graph3_merged[graph3_merged["source_country"] == selected_country]
+
+        if filtered.empty:
+            return (
+                html.Div("No proximity data available for this selection", style=NETWORK_EMPTY_STYLE),
+                {},
+                *empty_cards,
+            )
+
+        # Keep nearer pairs first (weight = great-circle miles; smaller = closer).
+        filtered = filtered[filtered["weight"] <= filtered["weight"].quantile(0.40)]
+        filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].min()
+
+        MAX_EDGES = 150
+
+        filtered = filtered.sort_values("weight", ascending=True).head(MAX_EDGES)
+
+        node_ids = set(filtered["source"]).union(set(filtered["target"]))
+
+        nodes = []
+        edges = []
+        node_meta = {}
+
+        neighbor_map = {nid: [] for nid in node_ids}
+        for _, row in filtered.iterrows():
+            s, t, w = row["source"], row["target"], float(row["weight"])
+            ms = AIRPORT_IATA_META.get(s) or {}
+            mt = AIRPORT_IATA_META.get(t) or {}
+            ds = ms.get("display_name") or s
+            dt = mt.get("display_name") or t
+            neighbor_map[s].append((t, w, dt))
+            neighbor_map[t].append((s, w, ds))
+
+        for node in node_ids:
+            m = AIRPORT_IATA_META.get(node) or {}
+            disp = m.get("display_name") or node
+            ct = m.get("country", "—")
+            neigh_rows = sorted(neighbor_map.get(node, []), key=lambda x: x[1])[:50]
+            prox_list = [f"{name} ({code}) — {mi:.1f} mi" for code, mi, name in neigh_rows]
+            node_meta[node] = {
+                "kind": "airport",
+                "name": disp,
+                "iata": node,
+                "country": ct,
+                "airport_count": None,
+                "airports": [],
+                "airline_count": None,
+                "airlines": [],
+                "proximity_neighbors": prox_list,
+            }
+            nodes.append({
+                "id": node,
+                "label": airport_network_display_label(node),
+                "title": (
+                    f"{disp}\nIATA: {node}\n{ct}\n"
+                    f"Edges: within {PROXIMITY_EDGE_MAX_MILES:.0f} mi (data cap)"
+                ),
+                "shape": "dot",
+                "size": 12,
+                "color": "#2ecc71",
+            })
+
+        max_mi = float(filtered["weight"].max()) if len(filtered) else 1.0
+        min_mi = float(filtered["weight"].min()) if len(filtered) else 1.0
+        for _, row in filtered.iterrows():
+            w = float(row["weight"])
+            # Shorter links draw slightly thicker (easier to read).
+            width = max(1.0, (max_mi - w) / max(max_mi - min_mi, 1e-6) * 9 + 1)
+            edges.append({
+                "from": row["source"],
+                "to": row["target"],
+                "width": width,
+                "title": f"Great-circle: {w:.1f} mi (≤{PROXIMITY_EDGE_MAX_MILES:.0f} mi layer)",
+                "color": {
+                    "color": "#a3e4c1",
+                    "opacity": 0.72,
+                },
+            })
+
+        mean_mi = round(float(filtered["weight"].mean()), 1) if len(filtered) else "—"
+        cards = (
+            build_metric_card_body(f"Proximity · {selected_country}", f"{len(node_ids)} airports"),
+            build_metric_card_body("Proximity links (shown)", len(edges)),
+            build_metric_card_body("Mean link distance (mi)", mean_mi),
+            build_metric_card_body(
+                "Shortest shown link (mi)",
+                round(float(filtered["weight"].iloc[0]), 1) if len(filtered) else "—",
+            ),
+        )
+
+        net = visdcc.Network(
+            id="network",
+            selection={"nodes": [], "edges": []},
+            data={"nodes": nodes, "edges": edges},
+            options={
+                "height": "900px",
+                "width": "100%",
+                "layout": {"hierarchical": {"enabled": False}},
+                "physics": {
+                    "enabled": True,
+                    "solver": "barnesHut",
+                    "barnesHut": {
+                        "gravitationalConstant": -22000,
+                        "springLength": 160,
+                        "springConstant": 0.018,
+                        "damping": 0.58,
+                    },
+                    "stabilization": {"iterations": 200},
+                },
+                "nodes": {"font": NETWORK_NODE_FONT},
+                "edges": {"smooth": {"type": "continuous", "roundness": 0.35}},
+                "interaction": {
+                    "hover": True,
+                    "navigationButtons": True,
+                    "dragNodes": True,
+                    "dragView": True,
+                    "zoomView": True,
+                    "tooltipDelay": 100,
+                },
+            },
+        )
+
+        return wrap_network_chart(net), node_meta, *cards
+
+    elif connection_type == "Shared destinations":
+
+        filtered = load_merged_shared_destinations_edges()
+        filtered = filtered[filtered["source_country"] == selected_country]
+
+        if filtered.empty:
+            return (
+                html.Div("No shared-destination data available for this selection", style=NETWORK_EMPTY_STYLE),
+                {},
+                *empty_cards,
+            )
+
+        # Keep pairs with many overlapping destinations (weight = count of shared dests).
+        filtered = filtered[filtered["weight"] > filtered["weight"].quantile(0.75)]
+        filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].max()
+
+        MAX_EDGES = 150
+
+        filtered = filtered.sort_values("weight", ascending=False).head(MAX_EDGES)
+
+        node_ids = set(filtered["source"]).union(set(filtered["target"]))
+
+        nodes = []
+        edges = []
+        node_meta = {}
+
+        peer_map = {nid: [] for nid in node_ids}
+        for _, row in filtered.iterrows():
+            s, t, w = row["source"], row["target"], float(row["weight"])
+            mt = AIRPORT_IATA_META.get(t) or {}
+            ms = AIRPORT_IATA_META.get(s) or {}
+            dt = mt.get("display_name") or t
+            ds = ms.get("display_name") or s
+            peer_map[s].append((t, w, dt))
+            peer_map[t].append((s, w, ds))
+
+        for node in node_ids:
+            m = AIRPORT_IATA_META.get(node) or {}
+            disp = m.get("display_name") or node
+            ct = m.get("country", "—")
+            peer_rows = sorted(peer_map.get(node, []), key=lambda x: -x[1])[:50]
+            peer_lines = [f"{name} ({code}) — {int(cnt)} shared dests" for code, cnt, name in peer_rows]
+            node_meta[node] = {
+                "kind": "airport",
+                "name": disp,
+                "iata": node,
+                "country": ct,
+                "airport_count": None,
+                "airports": [],
+                "airline_count": None,
+                "airlines": [],
+                "shared_dest_peers": peer_lines,
+            }
+            nodes.append({
+                "id": node,
+                "label": airport_network_display_label(node),
+                "title": (
+                    f"{disp}\nIATA: {node}\n{ct}\n"
+                    "Edges: # of destinations served by both airports"
+                ),
+                "shape": "dot",
+                "size": 12,
+                "color": "#9b59b6",
+            })
+
+        max_w = float(filtered["weight"].max()) if len(filtered) else 1.0
+        for _, row in filtered.iterrows():
+            w = float(row["weight"])
+            edges.append({
+                "from": row["source"],
+                "to": row["target"],
+                "width": max(1, w / max_w * 10),
+                "title": f"Shared destinations: {int(w)}",
+                "color": {
+                    "color": "#d7bde2",
+                    "opacity": 0.82,
+                },
+            })
+
+        mean_w = round(float(filtered["weight"].mean()), 1) if len(filtered) else "—"
+        cards = (
+            build_metric_card_body(f"Shared dest. · {selected_country}", f"{len(node_ids)} airports"),
+            build_metric_card_body("Links (shown)", len(edges)),
+            build_metric_card_body("Mean shared count", mean_w),
+            build_metric_card_body(
+                "Strongest pair (count)",
+                int(filtered["weight"].iloc[0]) if len(filtered) else "—",
+            ),
+        )
+
+        net = visdcc.Network(
+            id="network",
+            selection={"nodes": [], "edges": []},
+            data={"nodes": nodes, "edges": edges},
+            options={
+                "height": "900px",
+                "width": "100%",
+                "layout": {"hierarchical": {"enabled": False}},
+                "physics": {
+                    "enabled": True,
+                    "solver": "barnesHut",
+                    "barnesHut": {
+                        "gravitationalConstant": -20000,
+                        "springLength": 180,
+                        "springConstant": 0.02,
+                        "damping": 0.58,
+                    },
+                    "stabilization": {"iterations": 200},
+                },
+                "nodes": {"font": NETWORK_NODE_FONT},
+                "edges": {"smooth": {"type": "continuous", "roundness": 0.35}},
+                "interaction": {
+                    "hover": True,
+                    "navigationButtons": True,
+                    "dragNodes": True,
+                    "dragView": True,
+                    "zoomView": True,
+                    "tooltipDelay": 100,
+                },
+            },
+        )
+
+        return wrap_network_chart(net), node_meta, *cards
+
+    elif connection_type == "Shared dest. (cosine)":
+
+        filtered = load_merged_shared_destinations_cosine_edges()
+        filtered = filtered[filtered["source_country"] == selected_country]
+
+        if filtered.empty:
+            return (
+                html.Div("No cosine overlap data for this selection", style=NETWORK_EMPTY_STYLE),
+                {},
+                *empty_cards,
+            )
+
+        filtered = filtered[filtered["weight"] > filtered["weight"].quantile(0.75)]
+        filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].max()
+
+        MAX_EDGES = 150
+
+        filtered = filtered.sort_values("weight", ascending=False).head(MAX_EDGES)
+
+        node_ids = set(filtered["source"]).union(set(filtered["target"]))
+
+        nodes = []
+        edges = []
+        node_meta = {}
+
+        peer_map = {nid: [] for nid in node_ids}
+        for _, row in filtered.iterrows():
+            s, t, w = row["source"], row["target"], float(row["weight"])
+            mt = AIRPORT_IATA_META.get(t) or {}
+            ms = AIRPORT_IATA_META.get(s) or {}
+            dt = mt.get("display_name") or t
+            ds = ms.get("display_name") or s
+            peer_map[s].append((t, w, dt))
+            peer_map[t].append((s, w, ds))
+
+        for node in node_ids:
+            m = AIRPORT_IATA_META.get(node) or {}
+            disp = m.get("display_name") or node
+            ct = m.get("country", "—")
+            peer_rows = sorted(peer_map.get(node, []), key=lambda x: -x[1])[:50]
+            peer_lines = [f"{name} ({code}) — {sc:.3f}" for code, sc, name in peer_rows]
+            node_meta[node] = {
+                "kind": "airport",
+                "name": disp,
+                "iata": node,
+                "country": ct,
+                "airport_count": None,
+                "airports": [],
+                "airline_count": None,
+                "airlines": [],
+                "shared_cosine_peers": peer_lines,
+            }
+            nodes.append({
+                "id": node,
+                "label": airport_network_display_label(node),
+                "title": (
+                    f"{disp}\nIATA: {node}\n{ct}\n"
+                    "Cosine-style shared-destination score (size-adjusted)"
+                ),
+                "shape": "dot",
+                "size": 12,
+                "color": "#1abc9c",
+            })
+
+        max_w = float(filtered["weight"].max()) if len(filtered) else 1.0
+        for _, row in filtered.iterrows():
+            w = float(row["weight"])
+            edges.append({
+                "from": row["source"],
+                "to": row["target"],
+                "width": max(1, w / max_w * 10),
+                "title": f"Cosine-style overlap: {w:.3f}",
+                "color": {
+                    "color": "#7fe2d2",
+                    "opacity": 0.8,
+                },
+            })
+
+        mean_w = round(float(filtered["weight"].mean()), 3) if len(filtered) else "—"
+        cards = (
+            build_metric_card_body(f"Dest. overlap (cosine) · {selected_country}", f"{len(node_ids)} airports"),
+            build_metric_card_body("Links (shown)", len(edges)),
+            build_metric_card_body("Mean score", mean_w),
+            build_metric_card_body(
+                "Strongest score",
+                round(float(filtered["weight"].iloc[0]), 3) if len(filtered) else "—",
+            ),
+        )
+
+        net = visdcc.Network(
+            id="network",
+            selection={"nodes": [], "edges": []},
+            data={"nodes": nodes, "edges": edges},
+            options={
+                "height": "900px",
+                "width": "100%",
+                "layout": {"hierarchical": {"enabled": False}},
+                "physics": {
+                    "enabled": True,
+                    "solver": "barnesHut",
+                    "barnesHut": {
+                        "gravitationalConstant": -20000,
+                        "springLength": 180,
+                        "springConstant": 0.02,
+                        "damping": 0.58,
+                    },
+                    "stabilization": {"iterations": 200},
+                },
+                "nodes": {"font": NETWORK_NODE_FONT},
+                "edges": {"smooth": {"type": "continuous", "roundness": 0.35}},
+                "interaction": {
+                    "hover": True,
+                    "navigationButtons": True,
+                    "dragNodes": True,
+                    "dragView": True,
+                    "zoomView": True,
+                    "tooltipDelay": 100,
+                },
+            },
+        )
+
+        return wrap_network_chart(net), node_meta, *cards
+
     # -----------------------------
     # 3. FALLBACK
     # -----------------------------
-    return html.Div("Select a valid connection type")
+    return (
+        html.Div("Select a valid connection type", style=NETWORK_EMPTY_STYLE),
+        {},
+        *empty_cards,
+    )
+
+
+@app.callback(
+    Output('network-node-detail', 'children'),
+    Input('network', 'selection'),
+    State('network-node-meta', 'data'),
+)
+def network_node_detail_panel(selection, meta):
+    meta = meta or {}
+    hint = html.P(
+        "Hover a node for a quick summary. Click a node for full details here.",
+        style={"color": "rgba(255,255,255,0.78)", "margin": 0, "lineHeight": 1.5},
+    )
+    if not selection or not selection.get("nodes"):
+        return hint
+
+    node_id = selection["nodes"][0]
+    info = meta.get(node_id)
+    if not info:
+        return html.Div([
+            html.H4(node_id, style={"marginBottom": "12px", "color": "#ffffff"}),
+            hint,
+        ])
+
+    if info["kind"] == "airline":
+        body = [
+            html.H4(
+                info.get("name") or info.get("iata"),
+                style={"marginBottom": "8px", "color": "#ffffff"},
+            ),
+            html.P(
+                [
+                    html.Strong("IATA airline code: "),
+                    info.get("iata", "—"),
+                ],
+                style={"marginBottom": "8px", "color": "#e8ecf4"},
+            ),
+            html.P(
+                f"Serves {info.get('airport_count', 0)} airports in this view (top carriers / selected country).",
+                style={"marginBottom": "12px", "color": "#e8ecf4"},
+            ),
+            html.P(html.Strong("Airports"), style={"marginBottom": "6px", "color": "#ffffff"}),
+            html.Ul(
+                [html.Li(a) for a in info.get("airports") or []],
+                style={"maxHeight": "360px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
+            ),
+        ]
+        return html.Div(body)
+
+    # airport (carriers, similarity, proximity, shared-dest, cosine, …)
+    body = [
+        html.H4(
+            info.get("name") or info.get("iata"),
+            style={"marginBottom": "8px", "color": "#ffffff"},
+        ),
+        html.P(
+            [
+                html.Strong("IATA: "),
+            f"{info.get('iata', '—')} · {info.get('country', '—')}",
+            ],
+            style={"marginBottom": "12px", "color": "#e8ecf4"},
+        ),
+    ]
+    if info.get("airline_count"):
+        body.append(html.P(
+            f"Connected to {info['airline_count']} airlines in this carrier graph.",
+            style={"marginBottom": "8px", "color": "#e8ecf4"},
+        ))
+        body.append(html.P(html.Strong("Airlines"), style={"marginBottom": "6px", "color": "#ffffff"}))
+        body.append(html.Ul(
+            [html.Li(a) for a in info.get("airlines") or []],
+            style={"maxHeight": "280px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
+        ))
+    elif info.get("proximity_neighbors"):
+        body.append(html.P(
+            (
+                f"Great-circle neighbors in this view (edges capped at "
+                f"{PROXIMITY_EDGE_MAX_MILES:.0f} mi in source data; chart keeps shorter links first)."
+            ),
+            style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
+        ))
+        body.append(html.P(html.Strong("Nearby airports (shown links)"), style={"marginBottom": "6px", "color": "#fff"}))
+        body.append(html.Ul(
+            [html.Li(a) for a in info.get("proximity_neighbors") or []],
+            style={"maxHeight": "320px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
+        ))
+    elif info.get("shared_dest_peers"):
+        body.append(html.P(
+            "Each link counts destinations that appear in both airports’ outbound route lists "
+            "(same dest_iata served from each hub). Higher counts mean more overlapping networks.",
+            style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
+        ))
+        body.append(html.P(html.Strong("Peers (shown links)"), style={"marginBottom": "6px", "color": "#fff"}))
+        body.append(html.Ul(
+            [html.Li(a) for a in info.get("shared_dest_peers") or []],
+            style={"maxHeight": "320px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
+        ))
+    elif info.get("shared_cosine_peers"):
+        body.append(html.P(
+            "Cosine-style score: raw overlap divided by a size factor from each airport’s destination count, "
+            "so large hubs do not automatically link strongly to everyone.",
+            style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
+        ))
+        body.append(html.P(html.Strong("Peers (shown links)"), style={"marginBottom": "6px", "color": "#fff"}))
+        body.append(html.Ul(
+            [html.Li(a) for a in info.get("shared_cosine_peers") or []],
+            style={"maxHeight": "320px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
+        ))
+    else:
+        body.append(html.P(
+            "Similarity graph: edges show statistical similarity between airport feature profiles.",
+            style={"color": "rgba(255,255,255,0.75)", "fontSize": "0.95rem"},
+        ))
+    return html.Div(body)
 
 
 
