@@ -14,7 +14,7 @@ import visdcc
 #-----Read in and set up data
 airport_df = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/master_air.parquet')
 
-# One lookup for IATA → country (avoid huge merge joins on edge tables with hundreds of thousands of rows).
+#-----One lookup for IATA to country (avoid huge merge joins on edge tables with 1000s of rows)
 IATA_TO_COUNTRY = (
     airport_df.drop_duplicates(subset=["iata"])
     .set_index("iata")["country"]
@@ -22,7 +22,6 @@ IATA_TO_COUNTRY = (
 
 
 def attach_country_columns_to_edges(edges_df):
-    """Add source_country / target_country via map (faster than merge on large frames)."""
     out = edges_df.copy()
     out["source_country"] = out["source"].map(IATA_TO_COUNTRY)
     out["target_country"] = out["target"].map(IATA_TO_COUNTRY)
@@ -36,7 +35,6 @@ graph1_merged = pd.merge(graph1, airport_df1, on ='airport')
 
 
 def build_airline_iata_to_name(airport_df):
-    """Map 2-letter IATA airline codes to carrier names from route records."""
     mapping = {}
     for carriers in airport_df["carriers"].dropna():
         if not isinstance(carriers, (list, tuple, np.ndarray)):
@@ -80,7 +78,7 @@ SHARED_DESTINATIONS_COSINE_PARQUET_URL = (
     "edges_shared_destinations_cosine.parquet"
 )
 
-# Loaded on first use only (large tables); keeps app startup responsive.
+#-----Loaded on first use only; keeps app startup responsive
 merged_shared_destinations_edges = None
 merged_shared_destinations_cosine_edges = None
 
@@ -124,7 +122,7 @@ connection_type_choices = [
     "Shared destination cities (hub-adjusted score)",
 ]
 
-# Labels must match `connection_type_choices` exactly (used in dropdown values and `network_connections`).
+#----- Label defintions for connection types
 CONNECTION_TYPE_DEFINITIONS = [
     (
         "Carriers",
@@ -139,7 +137,7 @@ CONNECTION_TYPE_DEFINITIONS = [
     ),
     (
         "Proximity",
-        "Airports linked by short great-circle distance (within the proximity edge cap in the dataset). "
+        "Airports linked by short distance (within the proximity edge cap in the dataset). "
         "Shows geographic neighbors, not airline overlap.",
     ),
     (
@@ -215,21 +213,51 @@ METRIC_CARD_STYLE = {
     "textAlign": "left"
 }
 
+METRIC_CARD_TITLE_STYLE = {
+    "margin": "0 0 8px 0",
+    "fontSize": "0.8rem",
+    "fontWeight": "600",
+    "textTransform": "uppercase",
+    "letterSpacing": "1px",
+    "color": "rgba(255,255,255,0.8)",
+}
+
 LABEL_STYLE_WHITE = {"color": "#f4f6fb", "fontWeight": "600"}
+
+# Airport Metrics instructions modal: black panel, accent code for formulas
+INSTRUCTIONS_MODAL_BODY_STYLE = {
+    "paddingTop": "1.1rem",
+    "paddingBottom": "1.35rem",
+    "backgroundColor": "#000000",
+    "color": "#e8ecf4",
+}
+INSTRUCTIONS_INTRO_STYLE = {
+    "lineHeight": 1.55,
+    "marginBottom": "18px",
+    #"fontSize": "1.2rem",
+    "fontWeight": "500",
+    "color": "#f4f6fb",
+}
+INSTRUCTIONS_CODE_STYLE = {
+    "color": "#f0a8d8",
+    "backgroundColor": "rgba(232, 121, 200, 0.16)",
+    "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    "fontSize": "0.95rem",
+    "padding": "2px 8px",
+    "borderRadius": "5px",
+    "border": "1px solid rgba(240, 168, 216, 0.38)",
+}
+
+
+def inst_code(text):
+    return html.Code(text, style=INSTRUCTIONS_CODE_STYLE)
 
 
 def build_metric_card_body(title, value, font_size="1.8rem"):
     return dbc.CardBody([
         html.P(
             title,
-            style={
-                "margin": "0 0 8px 0",
-                "fontSize": "0.8rem",
-                "fontWeight": "600",
-                "textTransform": "uppercase",
-                "letterSpacing": "1px",
-                "color": "rgba(255,255,255,0.8)"
-            }
+            style=METRIC_CARD_TITLE_STYLE,
         ),
         html.H2(
             str(value),
@@ -301,7 +329,9 @@ app.layout = html.Div([
                         html.P(dcc.Markdown('''**What is the purpose of this dashboard?**'''),style={'color':'white'}),
                    ],style={'text-decoration': 'underline'}),
                    html.Div([
-                       html.P("This dashboard was created to blah.",style={'color':'white'}),
+                       html.P("This dashboard served two purposes for me:",style={'color':'white'}),
+                       html.P("1.) Revisit and expand upon an analysis I originally conducted six years ago",style={'color':'white'}),
+                       html.P("2.) Gain hands-on experience building and analyzing graph-structured datasets",style={'color':'white'}),
                        html.Br()
                    ]),
                    html.Div([
@@ -309,15 +339,15 @@ app.layout = html.Div([
                    ],style={'text-decoration': 'underline'}),
                    
                    html.Div([
-                       html.P(["The data utilized was pulled from ",html.A('here',href='https://www.railpassengers.org/resources/ridership-statistics/')],style={'color':'white'}),
+                       html.P(["The data for this analysis was pulled from this ",html.A('Github repository',href='https://github.com/Jonty/airline-route-data'), "."],style={'color':'white'}),
                        html.Br()
                    ]),
                    html.Div([
                        html.P(dcc.Markdown('''**What are the limitations of this data?**'''),style={'color':'white'}),
                    ],style={'text-decoration': 'underline'}),
                    html.Div([
-                       html.P("1.) Thing.",style={'color':'white'}),
-                       html.P("2.) Something.",style={'color':'white'}),
+                       html.P("1.) While this dataset is very extensive, it is not an exhaustive list of every commercial airport in the world.",style={'color':'white'}),
+                       html.P("2.) The primary metrics used in this dashboard, connectivity and redundancy scores, were developed by me for this analysis and should be viewed as exploratory measures.",style={'color':'white'}),
 
                    ])
 
@@ -325,6 +355,115 @@ app.layout = html.Div([
                ]),
         dcc.Tab(label='Airport Metrics',value='tab-2',style=tab_style, selected_style=tab_selected_style,
             children=[
+                #----- Modal Instructions 1
+                html.Div([
+                    dbc.Button(
+                        "Click Here for Instructions",
+                        id="open1",
+                        color="secondary",
+                        className="w-100",
+                        style={"fontSize": 18},
+                    ),
+                    dbc.Modal([
+                        dbc.ModalHeader(
+                            html.Span("Instructions"),
+                            className="text-white border-secondary",
+                            style={"backgroundColor": "#000000"},
+                            close_button=False,
+                        ),
+                        dbc.ModalBody(
+                            style=INSTRUCTIONS_MODAL_BODY_STYLE,
+                            children=[
+                                html.P(["Below this button, use the dropdown menu on the left to select a country, then the dropdown menu on the right to select an airport."],style=INSTRUCTIONS_INTRO_STYLE,),
+                                html.H4("Connectivity index (0-100)", style={"marginBottom": "8px", "marginTop": "4px", "color": "#ffffff"}),
+                                html.P(html.Strong("What goes into it"), style={"marginBottom": "6px"}),
+                                html.Ul([
+                                    html.Li("The number of distinct destinations this airport serves."),
+                                    html.Li([
+                                        "A tier from that count, using the same cutoffs for every airport: ",
+                                        inst_code("<10 destinations: tier 1; 10-24: 2; 25-49: 3; 50-99: 4; 100+: 5"),
+                                        ".",
+                                    ]),
+                                    html.Li([
+                                        "An airport-side measure: ",
+                                        inst_code("(destinations served) X (this airport's tier)"),
+                                        ".",
+                                    ]),
+                                    html.Li("A destination-side total: for each destination this airport serves, take that destination's own number of destinations served, multiply by its tier using the same cutoffs, then add those products across all destinations on this airport's list."),
+                                    html.Li([
+                                        "A weighted logarithmic combination: ",
+                                        inst_code("0.75 X log(1 + airport-side measure) + 0.25 X log(1 + destination-side total)"),
+                                        ". The logarithm limits the influence of very large counts.",
+                                    ]),
+                                ],style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
+                                html.P(html.Strong("How it is calculated"), style={"marginBottom": "6px"}),
+                                html.Ol([
+                                    html.Li("Assign the tier from the airport's destination count, multiply that count by the tier, and record the product as the airport-side measure."),
+                                    html.Li("For each destination on the airport's route list, assign the tier from that destination's destination count, multiply count by tier, sum across destinations to obtain the destination-side total."),
+                                    html.Li([
+                                        "Evaluate ",
+                                        inst_code("0.75 X log(1 + airport-side measure) + 0.25 X log(1 + destination-side total)"),
+                                        ".",
+                                    ]),
+                                    html.Li([
+                                        "Apply ",
+                                        inst_code("min-max"),
+                                        " scaling across all airports so the result is standardized as a ",
+                                        inst_code("0-100"),
+                                        " connectivity index.",
+                                    ]),
+                                ],style={"marginBottom": "24px", "paddingLeft": "20px", "lineHeight": 1.55}),
+                                html.H4(
+                                    "Redundancy score (0-100)",
+                                    style={"marginBottom": "8px", "color": "#ffffff"},
+                                ),
+                                html.P(html.Strong("What goes into it"), style={"marginBottom": "6px"}),
+                                html.Ul([
+                                    html.Li("Distance in miles to the nearest commercial airport (closer alternates receive a higher contribution after scaling)."),
+                                    html.Li([
+                                        "Counts of other airports within 10, 25, 50, 100, 250, and 500 miles, combined as ",
+                                        inst_code("4X(within 10 mi) + 3X(within 25) + 2X(within 50) + 1X(within 100) + 0.5X(within 250) + 0.25X(within 500)"),
+                                        ", then take the natural logarithm of one plus that total.",
+                                    ]),
+                                    html.Li("Average route length in miles from this airport (shorter averages receive a higher contribution after inverse scaling)."),
+                                    html.Li([
+                                        "This airport's ",
+                                        inst_code("connectivity index (0-100)"),
+                                        ".",
+                                    ]),
+                                ], style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
+                                html.P(html.Strong("How it is calculated"), style={"marginBottom": "6px"}),
+                                html.Ol([
+                                    html.Li("For each airport, evaluate the four quantities listed above independently."),
+                                    html.Li([
+                                        "Rescale each quantity separately to ",
+                                        inst_code("[0, 1]"),
+                                        " using ",
+                                        inst_code("min-max"),
+                                        " scaling across all airports.",
+                                    ]),
+                                    html.Li([
+                                        "Form a weighted mean of the four rescaled values: ",
+                                        inst_code("0.25X(nearest airport) + 0.30X(nearby-airport density) + 0.20X(average route length) + 0.25X(connectivity index)"),
+                                        ".",
+                                    ]),
+                                    html.Li([
+                                        "Apply ",
+                                        inst_code("min-max"),
+                                        " scaling to that weighted mean across all airports so the result is reported as a ",
+                                        inst_code("0-100"),
+                                        " redundancy score.",
+                                    ]),
+                                ],style={"marginBottom": "0", "paddingLeft": "20px", "lineHeight": 1.55}),
+                            ],
+                        ),
+                        dbc.ModalFooter(
+                            dbc.Button("Close", id="close1", className="ml-auto"),
+                            className="border-secondary",
+                            style={"backgroundColor": "#000000"},
+                        )
+                    ], id="modal1", size="xl", scrollable=True, content_style={"backgroundColor": "#000000"})
+                ], className="w-100"),
                 dbc.Row([
                     dbc.Col([
                         dbc.Label('Choose a country:'),
@@ -584,26 +723,6 @@ app.layout = html.Div([
 )
 def set_airport_options(selected_country):
     return [{'label': i, 'value': i} for i in country_airport_dict[selected_country]], country_airport_dict[selected_country][0],
-
-
-@app.callback(
-    Output('dropdown_conn_airport', 'options'),
-    Output('dropdown_conn_airport', 'value'),
-    Input('dropdown7', 'value'),
-)
-def set_connections_airport_dropdown(selected_country):
-    sub = (
-        airport_df[airport_df["country"] == selected_country]
-        .drop_duplicates(subset=["iata"])
-        .sort_values("display_name")
-    )
-    opts = [{"label": "All airports in country", "value": CONN_AIRPORT_ALL}]
-    for _, row in sub.iterrows():
-        opts.append({
-            "label": f"{row['display_name']} ({row['iata']})",
-            "value": row["iata"],
-        })
-    return opts, CONN_AIRPORT_ALL
 
 
 @app.callback(
@@ -1202,6 +1321,30 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
 # ----------------------------------- #
 # ------- Tab #4: Connections ------- #
 # ----------------------------------- #
+
+
+@app.callback(
+    Output('dropdown_conn_airport', 'options'),
+    Output('dropdown_conn_airport', 'value'),
+    Input('dropdown7', 'value'),
+)
+def set_connections_airport_dropdown(selected_country):
+    sub = (
+        airport_df[airport_df["country"] == selected_country]
+        .drop_duplicates(subset=["iata"])
+        .sort_values("display_name")
+    )
+    opts = [{"label": "All airports in country", "value": CONN_AIRPORT_ALL}]
+    for _, row in sub.iterrows():
+        opts.append({
+            "label": f"{row['display_name']} ({row['iata']})",
+            "value": row["iata"],
+        })
+    return opts, CONN_AIRPORT_ALL
+
+
+
+
 
 # vis-network defaults use gray node labels; white + subtle stroke reads better on dark surfaces.
 NETWORK_NODE_FONT = {
@@ -2169,6 +2312,18 @@ def network_node_detail_panel(selection, connection_type, meta):
         ))
     return html.Div([guide, divider] + body)
 
+#----- Modal Callbacks
+@app.callback(
+    Output("modal1", "is_open"),
+    [Input("open1", "n_clicks"), 
+    Input("close1", "n_clicks")],
+    [State("modal1", "is_open")],
+)
+
+def toggle_modal2(n1, n2, is_open):
+    if n1 or n2:
+        return not is_open
+    return is_open
 
 
 
