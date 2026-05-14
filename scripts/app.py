@@ -234,7 +234,6 @@ INSTRUCTIONS_MODAL_BODY_STYLE = {
 INSTRUCTIONS_INTRO_STYLE = {
     "lineHeight": 1.55,
     "marginBottom": "18px",
-    #"fontSize": "1.2rem",
     "fontWeight": "500",
     "color": "#f4f6fb",
 }
@@ -374,7 +373,7 @@ app.layout = html.Div([
                         dbc.ModalBody(
                             style=INSTRUCTIONS_MODAL_BODY_STYLE,
                             children=[
-                                html.P(["Below this button, use the dropdown menu on the left to select a country, then the dropdown menu on the right to select an airport."],style=INSTRUCTIONS_INTRO_STYLE,),
+                                html.P(["Below this button, use the dropdown menu on the left to select a country, then the dropdown menu on the right to select an airport.  The map showcases all the destinations one can fly to from the selected airport.  Below the map is a table showcasing information on those destinations.  The following is a description of the 2 primary metrics in this dashboard:"],style=INSTRUCTIONS_INTRO_STYLE,),
                                 html.H4("Connectivity index (0-100)", style={"marginBottom": "8px", "marginTop": "4px", "color": "#ffffff"}),
                                 html.P(html.Strong("What goes into it"), style={"marginBottom": "6px"}),
                                 html.Ul([
@@ -520,6 +519,37 @@ app.layout = html.Div([
         ),
         dcc.Tab(label='Airline Metrics',value='tab-3',style=tab_style, selected_style=tab_selected_style,
             children=[
+                #----- Modal Instructions 2
+                html.Div([
+                    dbc.Button(
+                        "Click Here for Instructions",
+                        id="open2",
+                        color="secondary",
+                        className="w-100",
+                        style={"fontSize": 18},
+                    ),
+                    dbc.Modal([
+                        dbc.ModalHeader(
+                            html.Span("Instructions"),
+                            className="text-white border-secondary",
+                            style={"backgroundColor": "#000000"},
+                            close_button=False,
+                        ),
+                        dbc.ModalBody(
+                            style=INSTRUCTIONS_MODAL_BODY_STYLE,
+                            children=[
+                                html.P("Below this button, use the dropdown menu on the left to select a country, then the dropdown menu on the right to select an airport.", style=INSTRUCTIONS_INTRO_STYLE),
+                                html.P("The chart on the left showcases the dominant airlines by city for the selected country (defined as the majority of flights are operated from this airline).  The map has a default view of showing the dominant airline for all cities in the selected country.  Choose 'Airline % Share' to get an airline specific view of the airline usage per city.  You can also change which airline frequency is displayed on the map.", style=INSTRUCTIONS_INTRO_STYLE),
+                                html.P("The chart on the right showcases the available airlines in the selected airport.", style=INSTRUCTIONS_INTRO_STYLE),
+                            ]
+                        ),
+                        dbc.ModalFooter(
+                            dbc.Button("Close", id="close2", className="ml-auto"),
+                            className="border-secondary",
+                            style={"backgroundColor": "#000000"},
+                        )
+                    ], id="modal2", size="xl", scrollable=True, content_style={"backgroundColor": "#000000"})
+                ], className="w-100"),
                 dbc.Row([
                     dbc.Col([
                         dbc.Label('Choose a country:'),
@@ -630,20 +660,74 @@ app.layout = html.Div([
         dcc.Tab(label='Connections',value='tab-4',style=tab_style, selected_style=tab_selected_style,
             children=[
                 dcc.Store(id='network-node-meta', data={}),
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card(id='conn-card1', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                    dbc.Col([
-                        dbc.Card(id='conn-card2', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                    dbc.Col([
-                        dbc.Card(id='conn-card3', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                    dbc.Col([
-                        dbc.Card(id='conn-card4', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                ]),
+                #----- Modal Instructions 3
+                html.Div([
+                    dbc.Button(
+                        "Click Here for Instructions",
+                        id="open3",
+                        color="secondary",
+                        className="w-100",
+                        style={"fontSize": 18},
+                    ),
+                    dbc.Modal([
+                        dbc.ModalHeader(
+                            html.Span("Instructions"),
+                            className="text-white border-secondary",
+                            style={"backgroundColor": "#000000"},
+                            close_button=False,
+                        ),
+                        dbc.ModalBody(
+                            style=INSTRUCTIONS_MODAL_BODY_STYLE,
+                            children=[
+                                html.P(["The network charts below show relationships between airports and airlines which are altered by the selections from the 3 dropdown menus.  Click a node to read details of the connection in the panel to the right of the graph. "],style=INSTRUCTIONS_INTRO_STYLE),
+                                html.P(["Below the button, use the dropdown menu on the far left to choose a graph connection type.  Use the dropdown menu in the middle to select a country.  If desired, use the dropdown menu on the far right to select an airport, otherwise the default value for this dropdown showcases all airports for the selected country."]), 
+                                html.P(["Use the panel on the right for a description of what each connection type represents.  Each connection type has a series of metrics that populate upon the dropdown selection.  Here is a summary of those metrics:"]),
+                                html.H4("Carriers", style={"marginBottom": "8px", "marginTop": "4px", "color": "#ffffff"}),
+                                html.Ul([
+                                    html.Li("Metric 1: How many of those top airlines appear in the chart (capped at 15)"),
+                                    html.Li("Metric 2: How many total airports in the country are shown"),
+                                    html.Li("Metric 3: How many airline-airport connections connect the two sides"),
+                                    html.Li("Metric 4: Which airport has the most connections in this view (busiest hub in the filtered graph)"),
+                                ],style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
+                                html.H4("Statistical similarity (airport attributes)", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
+                                html.Ul([
+                                    html.Li("Metric 1: How many airports appear as nodes in chart"),
+                                    html.Li("Metric 2: How many similarity connections are shown in chart"),
+                                    html.Li("Metric 3: Average similarity weight on those drawn connections"),
+                                    html.Li("Metric 4: Strongest similarity score among the connections shown in chart"),
+                                ],style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
+                                html.H4("Proximity",style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
+                                html.Ul([
+                                    html.Li("Metric 1 How many airports appear in the proximity view"),
+                                    html.Li("Metric 2: How many distance connections shown in chart"),
+                                    html.Li("Metric 3: Average # miles between connections shows in chart"),
+                                    html.Li("Metric 4: Shortest distance among the connections in chart"),
+                                ],style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
+                                html.H4("Shared destination cities (raw count)", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
+                                html.Ul([
+                                    html.Li("Metric 1: How many airports appear in the overlap view"),
+                                    html.Li("Metric 2: How many overlap connections shown in chart"),
+                                    html.Li("Metric 3: Average raw overlap count on the connections shown in chart"),
+                                    html.Li("Metric 4: Largest overlap count among the pairs shown"),
+                                ], style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
+                                html.H4("Shared destination cities (hub-adjusted score)", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
+                                html.Ul([
+                                    html.Li("Metric 1: How many airports appear in the adjusted overlap view"),
+                                    html.Li("Metric 2: How many adjusted connections are shown in chart"),
+                                    html.Li("Metric 3: Average adjusted score on the displayed connections"),
+                                    html.Li("Metric 4: Strongest adjusted score among the shown connections"),
+                                ], style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55})
+                            ],
+                        ),
+                        dbc.ModalFooter(
+                            dbc.Button("Close", id="close3", className="ml-auto"),
+                            className="border-secondary",
+                            style={"backgroundColor": "#000000"},
+                        )
+                    ], id="modal3", size="xl", scrollable=True, content_style={"backgroundColor": "#000000"})
+                ], className="w-100"),
+
+             
                 dbc.Row([
                     dbc.Col([
                         dbc.Label("Choose a connection type:", style=LABEL_STYLE_WHITE),
@@ -672,6 +756,20 @@ app.layout = html.Div([
                             clearable=False,
                         )
                     ], width=4),
+                ]),
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card(id='card9', style=METRIC_CARD_STYLE)
+                    ], width=3),
+                    dbc.Col([
+                        dbc.Card(id='card10', style=METRIC_CARD_STYLE)
+                    ], width=3),
+                    dbc.Col([
+                        dbc.Card(id='card11', style=METRIC_CARD_STYLE)
+                    ], width=3),
+                    dbc.Col([
+                        dbc.Card(id='card12', style=METRIC_CARD_STYLE)
+                    ], width=3),
                 ]),
                 dbc.Row([
                     dbc.Col([
@@ -1448,10 +1546,10 @@ def carrier_network_physics_options():
 @app.callback(
     Output('network_chart', 'children'),
     Output('network-node-meta', 'data'),
-    Output('conn-card1', 'children'),
-    Output('conn-card2', 'children'),
-    Output('conn-card3', 'children'),
-    Output('conn-card4', 'children'),
+    Output('card9', 'children'),
+    Output('card10', 'children'),
+    Output('card11', 'children'),
+    Output('card12', 'children'),
     Input('dropdown6', 'value'),
     Input('dropdown7', 'value'),
     Input('dropdown_conn_airport', 'value'),
@@ -2320,7 +2418,32 @@ def network_node_detail_panel(selection, connection_type, meta):
     [State("modal1", "is_open")],
 )
 
+def toggle_modal1(n1, n2, is_open):
+    if n1 or n2:
+        return not is_open
+    return is_open
+
+
+@app.callback(
+    Output("modal2", "is_open"),
+    [Input("open2", "n_clicks"), 
+    Input("close2", "n_clicks")],
+    [State("modal2", "is_open")],
+)
+
 def toggle_modal2(n1, n2, is_open):
+    if n1 or n2:
+        return not is_open
+    return is_open
+
+@app.callback(
+    Output("modal3", "is_open"),
+    [Input("open3", "n_clicks"), 
+    Input("close3", "n_clicks")],
+    [State("modal3", "is_open")],
+)
+
+def toggle_modal3(n1, n2, is_open):
     if n1 or n2:
         return not is_open
     return is_open
