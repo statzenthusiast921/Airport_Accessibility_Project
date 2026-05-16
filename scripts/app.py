@@ -58,6 +58,39 @@ AIRPORT_IATA_META = (
     .to_dict("index")
 )
 
+def build_similarity_airport_profiles():
+    ap = airport_df.drop_duplicates(subset=["iata"]).copy()
+    ap["num_dests"] = pd.to_numeric(ap["num_dests"], errors="coerce").fillna(0).astype(int)
+    ap["connectivity_index"] = pd.to_numeric(ap["connectivity_index"], errors="coerce").fillna(0.0)
+    ap["redundancy_score"] = pd.to_numeric(ap["redundancy_score"], errors="coerce").fillna(0.0)
+    ap["log1p_num_dests"] = np.log1p(ap["num_dests"].to_numpy(dtype=float))
+    z_cols = ["connectivity_index", "log1p_num_dests", "redundancy_score"]
+    mat = ap[z_cols].to_numpy(dtype=float)
+    mu = mat.mean(axis=0)
+    sig = mat.std(axis=0)
+    sig[sig == 0] = 1.0
+    z_mat = (mat - mu) / sig
+    profiles = {}
+    for i, iata in enumerate(ap["iata"].astype(str)):
+        profiles[iata] = {
+            "connectivity_index": float(mat[i, 0]),
+            "redundancy_score": float(mat[i, 2]),
+            "num_dests": int(ap["num_dests"].iloc[i]),
+            "z_connectivity_index": float(z_mat[i, 0]),
+            "z_log1p_num_dests": float(z_mat[i, 1]),
+            "z_redundancy_score": float(z_mat[i, 2]),
+        }
+    return profiles
+
+
+SIMILARITY_AIRPORT_PROFILE = build_similarity_airport_profiles()
+
+SIMILARITY_Z_FEATURE_KEYS = (
+    "z_connectivity_index",
+    "z_log1p_num_dests",
+    "z_redundancy_score",
+)
+
 
 graph2 = pd.read_parquet("https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_feature_similarity.parquet")
 graph2_merged = attach_country_columns_to_edges(graph2)
@@ -116,10 +149,10 @@ country_choices = sorted(airport_df['country'].unique())
 airport_choices = sorted(airport_df['display_name'].unique())
 connection_type_choices = [
     "Carriers",
-    "Statistical similarity (airport attributes)",
+    "Statistical Similarity",
     "Proximity",
-    "Shared destination cities (raw count)",
-    "Shared destination cities (hub-adjusted score)",
+    "Shared Destinations",
+    "Shared Destinations (Hub-Adjusted)",
 ]
 
 #----- Label defintions for connection types
@@ -130,10 +163,9 @@ CONNECTION_TYPE_DEFINITIONS = [
         "Useful for seeing which carriers cluster at which hubs (after the top-carrier filter).",
     ),
     (
-        "Statistical similarity (airport attributes)",
-        "Airports linked when their derived numeric profiles are statistically similar "
-        "(from the feature-similarity layer — not geography). Stronger links mean more alike "
-        "connectivity / redundancy-style metrics in the source data.",
+        "Statistical Similarity",
+        "Airports linked when connectivity index, redundancy score, and destination count "
+        "are alike (z-scored, then compared). Link scores are 0–1 (higher = more similar).",
     ),
     (
         "Proximity",
@@ -141,12 +173,12 @@ CONNECTION_TYPE_DEFINITIONS = [
         "Shows geographic neighbors, not airline overlap.",
     ),
     (
-        "Shared destination cities (raw count)",
+        "Shared Destinations",
         "Airports linked by how many destination cities they both serve (same destination IATA in both route lists). "
         "The weight is the raw count — large hubs usually share more destinations simply because they fly everywhere.",
     ),
     (
-        "Shared destination cities (hub-adjusted score)",
+        "Shared Destinations (Hub-Adjusted)",
         "Same underlying overlap as the raw count, but each link is scaled down when either airport serves "
         "a very large number of destinations (cosine-style adjustment). "
         "Makes overlap between a mega-hub and a mid-size airport easier to interpret fairly.",
@@ -280,6 +312,28 @@ def build_metric_card_body(title, value, font_size="1.8rem"):
         "justifyContent": "space-between"
     })
 
+
+def build_conn_metric_cards_row(*card_bodies):
+    if not card_bodies:
+        return html.Div()
+    col_width = 12 // len(card_bodies)
+    return dbc.Row([
+        dbc.Col(dbc.Card(body, style=METRIC_CARD_STYLE), width=col_width)
+        for body in card_bodies
+    ])
+
+
+def dominant_airline_share_at_iata(iata):
+    """Dominant carrier by frequency in airport carrier lists (airline_stats tab logic)."""
+    ap_rows = airport_df[airport_df["iata"] == iata]
+    if ap_rows.empty:
+        return None, None
+    names = ap_rows["carriers"].apply(extract_airline_names).explode().dropna()
+    if names.empty:
+        return None, None
+    counts = names.value_counts()
+    return counts.index[0], float(counts.iloc[0] / counts.sum())
+
 # ----- Define Hover columns to be used in map over dots
 HOVER_COLS = ['latitude', 'longitude', 'display_name', 'num_dests', 'redundancy_score', 'connectivity_index']
 
@@ -311,6 +365,63 @@ tab_selected_style = {
     'padding': '6px'
 }
 
+# Airline Metrics layout (must be defined before app.layout).
+AIRLINE_MAP_CONTROLS_BASE_STYLE = {
+    "display": "grid",
+    "gap": "12px",
+    "alignItems": "end",
+    "padding": "10px 14px",
+    "borderRadius": "14px",
+    "backgroundColor": "rgba(255,255,255,0.08)",
+    "marginBottom": "8px",
+}
+
+
+def airline_map_controls_row_style(grid_template_columns):
+    style = dict(AIRLINE_MAP_CONTROLS_BASE_STYLE)
+    style["gridTemplateColumns"] = grid_template_columns
+    return style
+
+
+AIRLINE_MAP_MODE_PICKER_LABEL_STYLE = {
+    "marginRight": 0,
+    "padding": "6px 12px",
+    "backgroundColor": "rgba(255,255,255,0.12)",
+    "borderRadius": "999px",
+    "display": "flex",
+    "alignItems": "center",
+    "justifyContent": "center",
+    "width": "100%",
+    "boxSizing": "border-box",
+}
+AIRLINE_CHARTS_ROW_STYLE = {
+    "display": "flex",
+    "alignItems": "stretch",
+}
+AIRLINE_MAP_COLUMN_STYLE = {
+    "display": "flex",
+    "flexDirection": "column",
+    "minWidth": 0,
+}
+AIRLINE_TREEMAP_COLUMN_STYLE = {
+    "display": "flex",
+    "flexDirection": "column",
+    "minWidth": 0,
+}
+AIRLINE_MAP_GRAPH_WRAP_STYLE = {
+    "flex": "1",
+    "minHeight": "480px",
+    "display": "flex",
+    "flexDirection": "column",
+}
+AIRLINE_TREEMAP_GRAPH_WRAP_STYLE = {
+    "flex": "1",
+    "minHeight": "560px",
+    "display": "flex",
+    "flexDirection": "column",
+}
+AIRLINE_MAP_FIGURE_HEIGHT = 520
+AIRLINE_TREEMAP_FIGURE_HEIGHT = 592
 
 
 app = dash.Dash(__name__,assets_folder=os.path.join(os.curdir,"assets"))
@@ -596,8 +707,9 @@ app.layout = html.Div([
                         )
                     ],width=3),
                 ]),
+                dcc.Store(id='airline_map_mode', data='All Airlines'),
                 dbc.Row([
-                    dbc.Col(
+                    dbc.Col([
                         html.Div([
                             html.Div([
                                 dbc.Label(
@@ -605,24 +717,30 @@ app.layout = html.Div([
                                     style={'marginBottom': '6px', 'fontWeight': '600'}
                                 ),
                                 dcc.RadioItems(
-                                    id='airline_map_mode',
+                                    id='airline_map_mode_all',
                                     options=[
                                         {'label': 'All Airlines', 'value': 'All Airlines'},
-                                        {'label': 'Airline % Share', 'value': 'Airline % Share'},
                                     ],
                                     value='All Airlines',
-                                    inline=True,
                                     inputStyle={'marginRight': '6px'},
-                                    labelStyle={
-                                        'marginRight': '12px',
-                                        'padding': '6px 12px',
-                                        'backgroundColor': 'rgba(255,255,255,0.12)',
-                                        'borderRadius': '999px',
-                                        'display': 'inline-flex',
-                                        'alignItems': 'center',
-                                    }
+                                    labelStyle=AIRLINE_MAP_MODE_PICKER_LABEL_STYLE,
                                 ),
-                            ], style={'minWidth': '260px'}),
+                            ], style={'minWidth': 0}),
+                            html.Div([
+                                dbc.Label(
+                                    '\u00a0',
+                                    style={'marginBottom': '6px', 'fontWeight': '600'}
+                                ),
+                                dcc.RadioItems(
+                                    id='airline_map_mode_share',
+                                    options=[
+                                        {'label': 'Airline % Share', 'value': 'Airline % Share'},
+                                    ],
+                                    value=None,
+                                    inputStyle={'marginRight': '6px'},
+                                    labelStyle=AIRLINE_MAP_MODE_PICKER_LABEL_STYLE,
+                                ),
+                            ], style={'minWidth': 0}),
                             html.Div([
                                 dbc.Label(
                                     'Heat map airline:',
@@ -633,28 +751,26 @@ app.layout = html.Div([
                                     style={'color': 'black'},
                                     clearable=False
                                 )
-                            ], id='heatmap_airline_control', style={'display': 'none', 'minWidth': '300px', 'flex': '1'})
-                        ], style={
-                            'display': 'flex',
-                            'gap': '16px',
-                            'alignItems': 'flex-end',
-                            'flexWrap': 'wrap',
-                            'padding': '10px 14px',
-                            'borderRadius': '14px',
-                            'backgroundColor': 'rgba(255,255,255,0.08)',
-                            'marginBottom': '8px'
-                        }),
-                        width=12
-                    )
-                ]),
-                dbc.Row([
+                            ], id='heatmap_airline_control', style={'display': 'none', 'minWidth': 0}),
+                        ], id='airline_map_controls_row', style=airline_map_controls_row_style('1fr 1fr')),
+                        html.Div(
+                            dcc.Graph(
+                                id='dominant_airline_by_country_map',
+                                style={'height': '100%', 'width': '100%'},
+                            ),
+                            style=AIRLINE_MAP_GRAPH_WRAP_STYLE,
+                        ),
+                    ], width=6, style=AIRLINE_MAP_COLUMN_STYLE),
                     dbc.Col([
-                        dcc.Graph(id='dominant_airline_by_country_map')
-                    ], width = 6),
-                    dbc.Col([
-                        dcc.Graph(id='airline_treemap')
-                    ], width = 6)
-                ])
+                        html.Div(
+                            dcc.Graph(
+                                id='airline_treemap',
+                                style={'height': '100%', 'width': '100%'},
+                            ),
+                            style=AIRLINE_TREEMAP_GRAPH_WRAP_STYLE,
+                        ),
+                    ], width=6, style=AIRLINE_TREEMAP_COLUMN_STYLE),
+                ], style=AIRLINE_CHARTS_ROW_STYLE)
             ]
         ),
         dcc.Tab(label='Connections',value='tab-4',style=tab_style, selected_style=tab_selected_style,
@@ -684,38 +800,47 @@ app.layout = html.Div([
                                 html.P(["Use the panel on the right for a description of what each connection type represents.  Each connection type has a series of metrics that populate upon the dropdown selection.  Here is a summary of those metrics:"]),
                                 html.H4("Carriers", style={"marginBottom": "8px", "marginTop": "4px", "color": "#ffffff"}),
                                 html.Ul([
-                                    html.Li("Metric 1: How many of those top airlines appear in the chart (capped at 15)"),
-                                    html.Li("Metric 2: How many total airports in the country are shown"),
-                                    html.Li("Metric 3: How many airline-airport connections connect the two sides"),
-                                    html.Li("Metric 4: Which airport has the most connections in this view (busiest hub in the filtered graph)"),
+                                    html.Li("Metric 1: How many top airlines appear in the chart (capped at 15)"),
+                                    html.Li("Metric 2: How many airports in the country are shown"),
+                                    html.Li("Metric 3: How many airline-airport links connect airlines to airports in the chart"),
+                                    html.Li("Metric 4: The airport in this view served by the most airlines (name and airline count)"),
+                                    html.Li(
+                                        "When a focus airport is selected, only 2 metrics are shown: "
+                                        "Metric 1 stays the same; Metric 2 changes to Dominant Airline "
+                                        "(airline with the highest carrier-list share at that airport)."
+                                    ),
                                 ],style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
-                                html.H4("Statistical similarity (airport attributes)", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
+                                html.H4("Statistical Similarity", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
                                 html.Ul([
-                                    html.Li("Metric 1: How many airports appear as nodes in chart"),
-                                    html.Li("Metric 2: How many similarity connections are shown in chart"),
-                                    html.Li("Metric 3: Average similarity weight on those drawn connections"),
-                                    html.Li("Metric 4: Strongest similarity score among the connections shown in chart"),
+                                    html.Li("Metric 1: How many similarity links are shown in the chart"),
+                                    html.Li("Metric 2: How many countries are represented among the airports in the chart"),
+                                    html.Li("Metric 3: Average similarity score on the connections shown"),
+                                    html.Li("Metric 4: Strongest similarity score among the connections shown"),
+                                    html.Li(
+                                        "When a focus airport is selected, Metric 4 changes to: "
+                                        "strongest similarity score with the airport pair in parentheses"
+                                    ),
                                 ],style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
                                 html.H4("Proximity",style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
                                 html.Ul([
-                                    html.Li("Metric 1 How many airports appear in the proximity view"),
-                                    html.Li("Metric 2: How many distance connections shown in chart"),
-                                    html.Li("Metric 3: Average # miles between connections shows in chart"),
-                                    html.Li("Metric 4: Shortest distance among the connections in chart"),
+                                    html.Li("Metric 1: How many proximity links are shown in the chart"),
+                                    html.Li("Metric 2: How many countries are represented among the airports in the chart"),
+                                    html.Li("Metric 3: Average distance in miles on the connections shown"),
+                                    html.Li("Metric 4: Shortest distance among the connections shown, with the airport pair in parentheses"),
                                 ],style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
-                                html.H4("Shared destination cities (raw count)", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
+                                html.H4("Shared Destinations", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
                                 html.Ul([
-                                    html.Li("Metric 1: How many airports appear in the overlap view"),
-                                    html.Li("Metric 2: How many overlap connections shown in chart"),
-                                    html.Li("Metric 3: Average raw overlap count on the connections shown in chart"),
-                                    html.Li("Metric 4: Largest overlap count among the pairs shown"),
+                                    html.Li("Metric 1: How many shared-destination links are shown in the chart"),
+                                    html.Li("Metric 2: How many countries are represented among the airports in the chart"),
+                                    html.Li("Metric 3: Average raw shared-destination count on the connections shown"),
+                                    html.Li("Metric 4: Highest raw overlap count, with the airport pair in parentheses"),
                                 ], style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55}),
-                                html.H4("Shared destination cities (hub-adjusted score)", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
+                                html.H4("Shared Destinations (Hub-Adjusted)", style={"marginBottom": "8px", "marginTop": "14px", "color": "#ffffff"}),
                                 html.Ul([
-                                    html.Li("Metric 1: How many airports appear in the adjusted overlap view"),
-                                    html.Li("Metric 2: How many adjusted connections are shown in chart"),
-                                    html.Li("Metric 3: Average adjusted score on the displayed connections"),
-                                    html.Li("Metric 4: Strongest adjusted score among the shown connections"),
+                                    html.Li("Metric 1: How many hub-adjusted links are shown in the chart"),
+                                    html.Li("Metric 2: How many countries are represented among the airports in the chart"),
+                                    html.Li("Metric 3: Average hub-adjusted score on the connections shown"),
+                                    html.Li("Metric 4: Highest hub-adjusted score, with the airport pair in parentheses"),
                                 ], style={"marginBottom": "14px", "paddingLeft": "20px", "lineHeight": 1.55})
                             ],
                         ),
@@ -757,20 +882,7 @@ app.layout = html.Div([
                         )
                     ], width=4),
                 ]),
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card(id='card9', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                    dbc.Col([
-                        dbc.Card(id='card10', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                    dbc.Col([
-                        dbc.Card(id='card11', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                    dbc.Col([
-                        dbc.Card(id='card12', style=METRIC_CARD_STYLE)
-                    ], width=3),
-                ]),
+                html.Div(id='conn-metric-cards'),
                 dbc.Row([
                     dbc.Col([
                         html.P(
@@ -798,6 +910,8 @@ app.layout = html.Div([
                                 "borderRadius": "12px",
                                 "padding": "16px 18px",
                                 "minHeight": "320px",
+                                "maxHeight": "720px",
+                                "overflowY": "auto",
                                 "color": "#f4f6fb",
                                 "border": "1px solid rgba(255,255,255,0.12)",
                                 "lineHeight": "1.45",
@@ -1056,6 +1170,7 @@ def airline_treemap_chart(selected_airport):
         paper_bgcolor="black",
         plot_bgcolor="black",
         font=dict(color="white"),
+        height=AIRLINE_TREEMAP_FIGURE_HEIGHT,
         title=dict(
             text=f"Airlines Available at {selected_airport}",
             font=dict(color="white", size=18),
@@ -1282,11 +1397,26 @@ def build_heat_colorscale(hex_color):
 
 
 @app.callback(
+    Output('airline_map_mode', 'data'),
+    Output('airline_map_mode_all', 'value'),
+    Output('airline_map_mode_share', 'value'),
+    Input('airline_map_mode_all', 'value'),
+    Input('airline_map_mode_share', 'value'),
+)
+def sync_airline_map_mode(all_val, share_val):
+    triggered = dash.callback_context.triggered_id
+    if triggered == 'airline_map_mode_share' and share_val:
+        return 'Airline % Share', None, 'Airline % Share'
+    return 'All Airlines', 'All Airlines', None
+
+
+@app.callback(
     Output('dropdown5', 'options'),
     Output('dropdown5', 'value'),
     Output('heatmap_airline_control', 'style'),
+    Output('airline_map_controls_row', 'style'),
     Input('dropdown3', 'value'),
-    Input('airline_map_mode', 'value'),
+    Input('airline_map_mode', 'data'),
     State('dropdown5', 'value'),
 )
 def update_heatmap_airline_control(selected_country, map_mode, current_airline):
@@ -1294,18 +1424,19 @@ def update_heatmap_airline_control(selected_country, map_mode, current_airline):
     top_airlines = prepared_country_data[2]
     options = [{'label': airline, 'value': airline} for airline in top_airlines]
     value = current_airline if current_airline in top_airlines else (top_airlines[0] if top_airlines else None)
-    style = (
-        {'display': 'block', 'minWidth': '300px', 'flex': '1'}
-        if map_mode == 'Airline % Share'
-        else {'display': 'none', 'minWidth': '300px', 'flex': '1'}
-    )
-    return options, value, style
+    if map_mode == 'Airline % Share':
+        heat_style = {'display': 'block', 'minWidth': 0}
+        row_style = airline_map_controls_row_style('1fr 1fr 1fr')
+    else:
+        heat_style = {'display': 'none', 'minWidth': 0}
+        row_style = airline_map_controls_row_style('1fr 1fr')
+    return options, value, heat_style, row_style
 
 
 @app.callback(
     Output('dominant_airline_by_country_map', 'figure'),
     Input('dropdown3', 'value'),
-    Input('airline_map_mode', 'value'),
+    Input('airline_map_mode', 'data'),
     Input('dropdown5', 'value'),
 )
 def dominant_airline_by_country_map(selected_country, map_mode, selected_airline):
@@ -1336,7 +1467,7 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
             radius=28,
             center=center,
             zoom=zoom,
-            height=500,
+            height=AIRLINE_MAP_FIGURE_HEIGHT,
             custom_data=["selected_airline", "pct_share", "city_name", "iata"],
             color_continuous_scale=build_heat_colorscale(airline_color),
             range_color=(0, visible_max_share),
@@ -1386,7 +1517,7 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
         category_orders={"dominant_airline_group": legend_order},
         color_discrete_map=color_map,
         zoom=2,
-        height=500,
+        height=AIRLINE_MAP_FIGURE_HEIGHT,
         size_max=18,
     )
     fig.update_traces(
@@ -1428,14 +1559,14 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
 )
 def set_connections_airport_dropdown(selected_country):
     sub = (
-        airport_df[airport_df["country"] == selected_country]
+        airport_df[airport_df["country"] == selected_country][["iata", "name", "country"]]
         .drop_duplicates(subset=["iata"])
-        .sort_values("display_name")
+        .sort_values("name")
     )
     opts = [{"label": "All airports in country", "value": CONN_AIRPORT_ALL}]
     for _, row in sub.iterrows():
         opts.append({
-            "label": f"{row['display_name']} ({row['iata']})",
+            "label": f"{row['name']}, {row['country']} ({row['iata']})",
             "value": row["iata"],
         })
     return opts, CONN_AIRPORT_ALL
@@ -1478,6 +1609,7 @@ NETWORK_PEER_NODE_COLOR = {
 }
 
 CONN_AIRPORT_ALL = "__ALL__"
+MAX_NETWORK_EDGES = 100
 
 
 def airport_node_sizes_and_color(iata, selected_country, peer_hex):
@@ -1495,8 +1627,190 @@ def filter_airport_edges(df, focus_iata):
     return df[(df["source"] == focus_iata) | (df["target"] == focus_iata)]
 
 
-def wrap_network_chart(net):
-    return html.Div([net], style=NETWORK_CHART_SURFACE)
+def countries_in_node_set(node_ids):
+    countries = set()
+    for iata in node_ids:
+        ct = (AIRPORT_IATA_META.get(iata) or {}).get("country")
+        if ct:
+            countries.add(ct)
+    return len(countries)
+
+
+def strongest_edge_pair_iata(filtered):
+    if filtered.empty:
+        return "—"
+    row = filtered.iloc[0]
+    return f"{row['source']}–{row['target']}"
+
+
+def metric_capped_if_needed(n):
+    n = int(n)
+    return f"{n} (Capped)" if n >= MAX_NETWORK_EDGES else str(n)
+
+
+def strongest_weight_count_pair(filtered):
+    if filtered.empty:
+        return "—"
+    max_w = filtered["weight"].max()
+    top = filtered.loc[filtered["weight"] == max_w].sort_values(["source", "target"])
+    row = top.iloc[0]
+    return f"{int(row['weight'])} ({row['source']}–{row['target']})"
+
+
+def strongest_adjusted_score_label(filtered):
+    if filtered.empty:
+        return "—"
+    max_w = filtered["weight"].max()
+    top = filtered.loc[filtered["weight"] == max_w].sort_values(["source", "target"])
+    row = top.iloc[0]
+    return f"{float(row['weight']):.3f} ({row['source']}–{row['target']})"
+
+
+def strongest_similarity_label(filtered):
+    if filtered.empty:
+        return "—"
+    max_w = filtered["weight"].max()
+    top = filtered.loc[filtered["weight"] == max_w].sort_values(["source", "target"])
+    row = top.iloc[0]
+    return f"{round(float(row['weight']), 3)} ({row['source']}–{row['target']})"
+
+
+def similarity_feature_distance(iata_a, iata_b):
+    """Equal-weight linear combo of |Δz| for connectivity, log(1+dests), and redundancy."""
+    pa = SIMILARITY_AIRPORT_PROFILE.get(iata_a)
+    pb = SIMILARITY_AIRPORT_PROFILE.get(iata_b)
+    if not pa or not pb:
+        return np.nan
+    diffs = [abs(pa[k] - pb[k]) for k in SIMILARITY_Z_FEATURE_KEYS]
+    return float(sum(diffs) / len(diffs))
+
+
+def apply_similarity_scores(edges_df):
+    """Replace edge weights with 0–1 similarity (1 = most alike in this edge set)."""
+    if edges_df.empty:
+        return edges_df
+    out = edges_df.copy()
+    distances = [
+        similarity_feature_distance(s, t)
+        for s, t in zip(out["source"], out["target"])
+    ]
+    out["_sim_dist"] = distances
+    valid = out["_sim_dist"].notna()
+    if not valid.any():
+        return out.drop(columns=["_sim_dist"], errors="ignore")
+    d = out.loc[valid, "_sim_dist"].astype(float)
+    d_min, d_max = float(d.min()), float(d.max())
+    if d_max == d_min:
+        out.loc[valid, "weight"] = 1.0
+    else:
+        out.loc[valid, "weight"] = 1.0 - (d - d_min) / (d_max - d_min)
+    return out.drop(columns=["_sim_dist"])
+
+
+def similarity_pct_diff_vs_focus(clicked_val, focus_val):
+    """Percent difference of clicked airport metric relative to the focus airport."""
+    if focus_val == 0:
+        return "+0.0% vs focus" if clicked_val == 0 else None
+    pct = (clicked_val - focus_val) / focus_val * 100.0
+    sign = "+" if pct >= 0 else ""
+    return f"{sign}{pct:.1f}% vs focus"
+
+
+def build_statistical_similarity_detail_body(info, focus_iata=None):
+    profile = SIMILARITY_AIRPORT_PROFILE.get(info.get("iata"))
+    if not profile:
+        return [
+            html.P("Profile data unavailable for this airport.", style={"color": "#e8ecf4"}),
+        ]
+
+    body = []
+    if focus_iata and focus_iata != CONN_AIRPORT_ALL:
+        focus_profile = SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
+        if focus_profile:
+            focus_meta = AIRPORT_IATA_META.get(focus_iata) or {}
+            focus_name = focus_meta.get("display_name") or focus_iata
+            body.append(html.P(
+                f"Compared to focus airport: {focus_name} ({focus_iata})",
+                style={
+                    "marginBottom": "8px",
+                    "fontSize": "0.9rem",
+                    "color": "rgba(255,255,255,0.82)",
+                },
+            ))
+
+    metric_specs = (
+        ("Connectivity Index", "connectivity_index", False),
+        ("Redundancy Index", "redundancy_score", False),
+        ("# Destinations", "num_dests", True),
+    )
+    focus_profile = (
+        SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
+        if focus_iata and focus_iata != CONN_AIRPORT_ALL
+        else None
+    )
+
+    lines = []
+    for label, key, as_int in metric_specs:
+        val = profile[key]
+        text = f"{label}: {int(val)}" if as_int else f"{label}: {val:.2f}"
+        if focus_profile:
+            diff = similarity_pct_diff_vs_focus(val, focus_profile[key])
+            if diff is not None:
+                text = f"{text} ({diff})"
+        lines.append(html.Li(text))
+
+    body.append(html.Ul(
+        lines,
+        style={"paddingLeft": "20px", "color": "#e8ecf4", "lineHeight": 1.6},
+    ))
+    return body
+
+
+def wrap_network_chart(net, legend_items=None):
+    surface_style = dict(NETWORK_CHART_SURFACE)
+    surface_style["position"] = "relative"
+    children = [net]
+    if legend_items:
+        children.append(
+            html.Div(
+                [
+                    *[
+                        html.Div(
+                            [
+                                html.Span(
+                                    style={
+                                        "display": "inline-block",
+                                        "width": "12px",
+                                        "height": "12px",
+                                        "borderRadius": "50%",
+                                        "backgroundColor": color,
+                                        "marginRight": "8px",
+                                        "verticalAlign": "middle",
+                                    }
+                                ),
+                                html.Span(label, style={"verticalAlign": "middle"}),
+                            ],
+                            style={"marginBottom": "4px"},
+                        )
+                        for label, color in legend_items
+                    ],
+                ],
+                style={
+                    "position": "absolute",
+                    "top": "10px",
+                    "right": "12px",
+                    "backgroundColor": "rgba(18, 21, 28, 0.92)",
+                    "border": "1px solid rgba(255,255,255,0.15)",
+                    "borderRadius": "8px",
+                    "padding": "8px 12px",
+                    "zIndex": 10,
+                    "fontSize": "0.8rem",
+                    "color": "#e8ecf4",
+                    "lineHeight": 1.4,
+                },
+            )
+        )
+    return html.Div(children, style=surface_style)
 
 
 def airport_network_display_label(iata):
@@ -1546,21 +1860,19 @@ def carrier_network_physics_options():
 @app.callback(
     Output('network_chart', 'children'),
     Output('network-node-meta', 'data'),
-    Output('card9', 'children'),
-    Output('card10', 'children'),
-    Output('card11', 'children'),
-    Output('card12', 'children'),
+    Output('conn-metric-cards', 'children'),
     Input('dropdown6', 'value'),
     Input('dropdown7', 'value'),
     Input('dropdown_conn_airport', 'value'),
 )
 def network_connections(connection_type, selected_country, focus_airport):
-    empty_cards = (
+    empty_metric_bodies = (
         build_metric_card_body("Connection view", "—"),
         build_metric_card_body("Nodes", "—"),
         build_metric_card_body("Links", "—"),
         build_metric_card_body("Detail", "—"),
     )
+    empty_cards_row = build_conn_metric_cards_row(*empty_metric_bodies)
 
     focus_airport = focus_airport or CONN_AIRPORT_ALL
 
@@ -1572,7 +1884,7 @@ def network_connections(connection_type, selected_country, focus_airport):
             return (
                 html.Div("No data available for this selection", style=NETWORK_EMPTY_STYLE),
                 {},
-                *empty_cards,
+                empty_cards_row,
             )
 
         # ---- Optional: reduce noise (top airlines only)
@@ -1593,7 +1905,7 @@ def network_connections(connection_type, selected_country, focus_airport):
                         style=NETWORK_EMPTY_STYLE,
                     ),
                     {},
-                    *empty_cards,
+                    empty_cards_row,
                 )
 
         airlines = filtered_graph['airline'].unique()
@@ -1679,18 +1991,35 @@ def network_connections(connection_type, selected_country, focus_airport):
         n_airlines = len(airlines)
         n_airports = len(airports)
         n_edges = len(edges)
-        hub = (
-            filtered_graph["airport"].value_counts().idxmax()
-            if n_edges else "—"
+        hub_airline_counts = (
+            filtered_graph.groupby("airport")["airline"].nunique().sort_values(ascending=False)
+            if n_edges else pd.Series(dtype=int)
         )
-        hub_name = (AIRPORT_IATA_META.get(hub) or {}).get("display_name") or hub
+        if len(hub_airline_counts):
+            hub_iata = hub_airline_counts.index[0]
+            hub_n_airlines = int(hub_airline_counts.iloc[0])
+            hub_name = (AIRPORT_IATA_META.get(hub_iata) or {}).get("display_name") or hub_iata
+            most_airlines_val = f"{hub_name} ({hub_n_airlines} airlines)"
+        else:
+            most_airlines_val = "—"
 
-        cards = (
-            build_metric_card_body(f"Carriers · {selected_country}", f"{n_airlines} airlines (top)"),
-            build_metric_card_body("Airports in view", n_airports),
-            build_metric_card_body("Airport–airline links", n_edges),
-            build_metric_card_body("Busiest airport (links)", hub_name),
-        )
+        if focus_airport != CONN_AIRPORT_ALL:
+            dom_name, dom_pct = dominant_airline_share_at_iata(focus_airport)
+            if dom_name and dom_pct is not None:
+                dominant_val = f"{dom_name} ({dom_pct:.1%})"
+            else:
+                dominant_val = "—"
+            cards = (
+                build_metric_card_body(f"Carriers · {selected_country}", f"{n_airlines} airlines (top)"),
+                build_metric_card_body("Dominant Airline", dominant_val),
+            )
+        else:
+            cards = (
+                build_metric_card_body(f"Carriers · {selected_country}", f"{n_airlines} airlines (top)"),
+                build_metric_card_body("Airports in view", n_airports),
+                build_metric_card_body("Airport–airline links", n_edges),
+                build_metric_card_body("Airport with most airlines", most_airlines_val),
+            )
 
         net = visdcc.Network(
             id='network',
@@ -1699,9 +2028,15 @@ def network_connections(connection_type, selected_country, focus_airport):
             options=carrier_network_physics_options(),
         )
 
-        return wrap_network_chart(net), node_meta, *cards
+        return wrap_network_chart(
+            net,
+            [
+                ("Airports in selected country", NETWORK_CENTRAL_NODE_COLOR),
+                ("Airlines", NETWORK_PEER_NODE_COLOR["carriers_airline"]),
+            ],
+        ), node_meta, build_conn_metric_cards_row(*cards)
 
-    elif connection_type == "Statistical similarity (airport attributes)":
+    elif connection_type == "Statistical Similarity":
 
         filtered = graph2_merged[graph2_merged['source_country'] == selected_country]
         filtered = filter_airport_edges(filtered, focus_airport)
@@ -1713,17 +2048,17 @@ def network_connections(connection_type, selected_country, focus_airport):
                     style=NETWORK_EMPTY_STYLE,
                 ),
                 {},
-                *empty_cards,
+                empty_cards_row,
             )
+
+        filtered = apply_similarity_scores(filtered)
 
         # ---- Filter weak edges (VERY important for readability)
         if focus_airport == CONN_AIRPORT_ALL:
             filtered = filtered[filtered["weight"] > filtered["weight"].quantile(0.75)]
         filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].max()
 
-        MAX_EDGES = 150
-
-        filtered = filtered.sort_values("weight", ascending=False).head(MAX_EDGES)
+        filtered = filtered.sort_values("weight", ascending=False).head(MAX_NETWORK_EDGES)
 
         node_ids = set(filtered["source"]).union(set(filtered["target"]))
 
@@ -1745,6 +2080,7 @@ def network_connections(connection_type, selected_country, focus_airport):
                 "airports": [],
                 "airline_count": None,
                 "airlines": [],
+                "similarity_airport": True,
             }
             ncol, nsz = airport_node_sizes_and_color(node, selected_country, peer_c)
             nodes.append({
@@ -1762,7 +2098,7 @@ def network_connections(connection_type, selected_country, focus_airport):
                 "from": row["source"],
                 "to": row["target"],
                 "width": max(1, row["weight"] / max_w * 10),
-                "title": f"Attribute similarity: {row['weight']:.3f}",
+                "title": f"Similarity score: {row['weight']:.3f}",
                 "color": {
                     "color": "#818CF8",
                     "opacity": 0.82
@@ -1770,11 +2106,13 @@ def network_connections(connection_type, selected_country, focus_airport):
             })
 
         mean_w = round(float(filtered["weight"].mean()), 3) if len(filtered) else "—"
+        links_val = metric_capped_if_needed(len(edges))
+        strongest_sim = strongest_similarity_label(filtered)
         cards = (
-            build_metric_card_body(f"Feature similarity · {selected_country}", f"{len(node_ids)} airports"),
-            build_metric_card_body("Attribute-similarity links (shown)", len(edges)),
-            build_metric_card_body("Mean edge weight", mean_w),
-            build_metric_card_body("Strongest link", round(float(filtered["weight"].iloc[0]), 3) if len(filtered) else "—"),
+            build_metric_card_body("Similarity links (shown)", links_val),
+            build_metric_card_body("# countries in view", countries_in_node_set(node_ids)),
+            build_metric_card_body("Mean similarity score", mean_w),
+            build_metric_card_body("Strongest link", strongest_sim),
         )
 
         net = visdcc.Network(
@@ -1813,7 +2151,13 @@ def network_connections(connection_type, selected_country, focus_airport):
             }
         )
 
-        return wrap_network_chart(net), node_meta, *cards
+        return wrap_network_chart(
+            net,
+            [
+                ("Airports in selected country", NETWORK_CENTRAL_NODE_COLOR),
+                ("Airports in other countries", NETWORK_PEER_NODE_COLOR["similarity"]),
+            ],
+        ), node_meta, build_conn_metric_cards_row(*cards)
 
     elif connection_type == "Proximity":
     
@@ -1827,17 +2171,15 @@ def network_connections(connection_type, selected_country, focus_airport):
                     style=NETWORK_EMPTY_STYLE,
                 ),
                 {},
-                *empty_cards,
+                empty_cards_row,
             )
 
-        # Keep nearer pairs first (weight = great-circle miles; smaller = closer).
+        # Keep nearer pairs first (weight = distance in miles; smaller = closer).
         if focus_airport == CONN_AIRPORT_ALL:
             filtered = filtered[filtered["weight"] <= filtered["weight"].quantile(0.40)]
         filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].min()
 
-        MAX_EDGES = 150
-
-        filtered = filtered.sort_values("weight", ascending=True).head(MAX_EDGES)
+        filtered = filtered.sort_values("weight", ascending=True).head(MAX_NETWORK_EDGES)
 
         node_ids = set(filtered["source"]).union(set(filtered["target"]))
 
@@ -1896,7 +2238,7 @@ def network_connections(connection_type, selected_country, focus_airport):
                 "from": row["source"],
                 "to": row["target"],
                 "width": width,
-                "title": f"Great-circle: {w:.1f} mi (≤{PROXIMITY_EDGE_MAX_MILES:.0f} mi layer)",
+                "title": f"Distance: {w:.1f} mi (≤{PROXIMITY_EDGE_MAX_MILES:.0f} mi layer)",
                 "color": {
                     "color": "#4ADE80",
                     "opacity": 0.78,
@@ -1904,15 +2246,26 @@ def network_connections(connection_type, selected_country, focus_airport):
             })
 
         mean_mi = round(float(filtered["weight"].mean()), 1) if len(filtered) else "—"
-        cards = (
-            build_metric_card_body(f"Proximity · {selected_country}", f"{len(node_ids)} airports"),
-            build_metric_card_body("Proximity links (shown)", len(edges)),
-            build_metric_card_body("Mean link distance (mi)", mean_mi),
-            build_metric_card_body(
-                "Shortest shown link (mi)",
-                round(float(filtered["weight"].iloc[0]), 1) if len(filtered) else "—",
-            ),
-        )
+        links_val = metric_capped_if_needed(len(edges))
+        if len(filtered):
+            shortest_row = filtered.iloc[0]
+            shortest_val = f"{round(float(shortest_row['weight']), 1)} ({shortest_row['source']}–{shortest_row['target']})"
+        else:
+            shortest_val = "—"
+        if focus_airport != CONN_AIRPORT_ALL:
+            cards = (
+                build_metric_card_body("Proximity links (shown)", links_val),
+                build_metric_card_body("# countries in view", countries_in_node_set(node_ids)),
+                build_metric_card_body("Mean link distance (mi)", mean_mi),
+                build_metric_card_body("Shortest shown link (mi)", shortest_val),
+            )
+        else:
+            cards = (
+                build_metric_card_body("Proximity links (shown)", links_val),
+                build_metric_card_body("# countries in view", countries_in_node_set(node_ids)),
+                build_metric_card_body("Mean link distance (mi)", mean_mi),
+                build_metric_card_body("Shortest shown link (mi)", shortest_val),
+            )
 
         net = visdcc.Network(
             id="network",
@@ -1946,9 +2299,15 @@ def network_connections(connection_type, selected_country, focus_airport):
             },
         )
 
-        return wrap_network_chart(net), node_meta, *cards
+        return wrap_network_chart(
+            net,
+            [
+                ("Airports in selected country", NETWORK_CENTRAL_NODE_COLOR),
+                ("Airports in other countries", NETWORK_PEER_NODE_COLOR["proximity"]),
+            ],
+        ), node_meta, build_conn_metric_cards_row(*cards)
 
-    elif connection_type == "Shared destination cities (raw count)":
+    elif connection_type == "Shared Destinations":
 
         filtered = load_merged_shared_destinations_edges()
         filtered = filtered[filtered["source_country"] == selected_country]
@@ -1961,7 +2320,7 @@ def network_connections(connection_type, selected_country, focus_airport):
                     style=NETWORK_EMPTY_STYLE,
                 ),
                 {},
-                *empty_cards,
+                empty_cards_row,
             )
 
         # Keep pairs with many overlapping destinations (weight = count of shared dests).
@@ -1969,9 +2328,7 @@ def network_connections(connection_type, selected_country, focus_airport):
             filtered = filtered[filtered["weight"] > filtered["weight"].quantile(0.75)]
         filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].max()
 
-        MAX_EDGES = 150
-
-        filtered = filtered.sort_values("weight", ascending=False).head(MAX_EDGES)
+        filtered = filtered.sort_values("weight", ascending=False).head(MAX_NETWORK_EDGES)
 
         node_ids = set(filtered["source"]).union(set(filtered["target"]))
 
@@ -2038,15 +2395,22 @@ def network_connections(connection_type, selected_country, focus_airport):
             })
 
         mean_w = round(float(filtered["weight"].mean()), 1) if len(filtered) else "—"
-        cards = (
-            build_metric_card_body(f"Shared destinations (count) · {selected_country}", f"{len(node_ids)} airports"),
-            build_metric_card_body("Links (shown)", len(edges)),
-            build_metric_card_body("Mean shared count", mean_w),
-            build_metric_card_body(
-                "Strongest pair (count)",
-                int(filtered["weight"].iloc[0]) if len(filtered) else "—",
-            ),
-        )
+        strongest_pair = strongest_weight_count_pair(filtered)
+        links_val = metric_capped_if_needed(len(edges))
+        if focus_airport != CONN_AIRPORT_ALL:
+            cards = (
+                build_metric_card_body("Links (shown)", links_val),
+                build_metric_card_body("# countries in view", countries_in_node_set(node_ids)),
+                build_metric_card_body("Mean shared count", mean_w),
+                build_metric_card_body("Strongest pair (count)", strongest_pair),
+            )
+        else:
+            cards = (
+                build_metric_card_body("Links (shown)", links_val),
+                build_metric_card_body("# countries in view", countries_in_node_set(node_ids)),
+                build_metric_card_body("Mean shared count", mean_w),
+                build_metric_card_body("Strongest pair (count)", strongest_pair),
+            )
 
         net = visdcc.Network(
             id="network",
@@ -2080,9 +2444,15 @@ def network_connections(connection_type, selected_country, focus_airport):
             },
         )
 
-        return wrap_network_chart(net), node_meta, *cards
+        return wrap_network_chart(
+            net,
+            [
+                ("Airports in selected country", NETWORK_CENTRAL_NODE_COLOR),
+                ("Airports in other countries", NETWORK_PEER_NODE_COLOR["shared_raw"]),
+            ],
+        ), node_meta, build_conn_metric_cards_row(*cards)
 
-    elif connection_type == "Shared destination cities (hub-adjusted score)":
+    elif connection_type == "Shared Destinations (Hub-Adjusted)":
 
         filtered = load_merged_shared_destinations_cosine_edges()
         filtered = filtered[filtered["source_country"] == selected_country]
@@ -2095,16 +2465,14 @@ def network_connections(connection_type, selected_country, focus_airport):
                     style=NETWORK_EMPTY_STYLE,
                 ),
                 {},
-                *empty_cards,
+                empty_cards_row,
             )
 
         if focus_airport == CONN_AIRPORT_ALL:
             filtered = filtered[filtered["weight"] > filtered["weight"].quantile(0.75)]
         filtered = filtered.groupby(["source", "target"], as_index=False)["weight"].max()
 
-        MAX_EDGES = 150
-
-        filtered = filtered.sort_values("weight", ascending=False).head(MAX_EDGES)
+        filtered = filtered.sort_values("weight", ascending=False).head(MAX_NETWORK_EDGES)
 
         node_ids = set(filtered["source"]).union(set(filtered["target"]))
 
@@ -2171,15 +2539,22 @@ def network_connections(connection_type, selected_country, focus_airport):
             })
 
         mean_w = round(float(filtered["weight"].mean()), 3) if len(filtered) else "—"
-        cards = (
-            build_metric_card_body(f"Shared destinations (adjusted) · {selected_country}", f"{len(node_ids)} airports"),
-            build_metric_card_body("Links (shown)", len(edges)),
-            build_metric_card_body("Mean score", mean_w),
-            build_metric_card_body(
-                "Strongest score",
-                round(float(filtered["weight"].iloc[0]), 3) if len(filtered) else "—",
-            ),
-        )
+        strongest_pair = strongest_adjusted_score_label(filtered)
+        links_val = metric_capped_if_needed(len(edges))
+        if focus_airport != CONN_AIRPORT_ALL:
+            cards = (
+                build_metric_card_body("Links (shown)", links_val),
+                build_metric_card_body("# countries in view", countries_in_node_set(node_ids)),
+                build_metric_card_body("Mean adjusted score", mean_w),
+                build_metric_card_body("Strongest score", strongest_pair),
+            )
+        else:
+            cards = (
+                build_metric_card_body("Links (shown)", links_val),
+                build_metric_card_body("# countries in view", countries_in_node_set(node_ids)),
+                build_metric_card_body("Mean adjusted score", mean_w),
+                build_metric_card_body("Strongest score", strongest_pair),
+            )
 
         net = visdcc.Network(
             id="network",
@@ -2213,7 +2588,13 @@ def network_connections(connection_type, selected_country, focus_airport):
             },
         )
 
-        return wrap_network_chart(net), node_meta, *cards
+        return wrap_network_chart(
+            net,
+            [
+                ("Airports in selected country", NETWORK_CENTRAL_NODE_COLOR),
+                ("Airports in other countries", NETWORK_PEER_NODE_COLOR["shared_cosine"]),
+            ],
+        ), node_meta, build_conn_metric_cards_row(*cards)
 
     # -----------------------------
     # 3. FALLBACK
@@ -2221,7 +2602,7 @@ def network_connections(connection_type, selected_country, focus_airport):
     return (
         html.Div("Select a valid connection type", style=NETWORK_EMPTY_STYLE),
         {},
-        *empty_cards,
+        empty_cards_row,
     )
 
 
@@ -2288,9 +2669,10 @@ def build_connection_types_guide(active_connection_type):
     Output('network-node-detail', 'children'),
     Input('network', 'selection'),
     Input('dropdown6', 'value'),
+    Input('dropdown_conn_airport', 'value'),
     State('network-node-meta', 'data'),
 )
-def network_node_detail_panel(selection, connection_type, meta):
+def network_node_detail_panel(selection, connection_type, focus_airport, meta):
     meta = meta or {}
     guide = build_connection_types_guide(connection_type)
     divider = html.Hr(
@@ -2366,10 +2748,12 @@ def network_node_detail_panel(selection, connection_type, meta):
             [html.Li(a) for a in info.get("airlines") or []],
             style={"maxHeight": "280px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
         ))
+    elif info.get("similarity_airport"):
+        body.extend(build_statistical_similarity_detail_body(info, focus_airport))
     elif info.get("proximity_neighbors"):
         body.append(html.P(
             (
-                f"Great-circle neighbors in this view (edges capped at "
+                f"Nearby airports in this view (links capped at "
                 f"{PROXIMITY_EDGE_MAX_MILES:.0f} mi in source data; chart keeps shorter links first)."
             ),
             style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
@@ -2447,8 +2831,6 @@ def toggle_modal3(n1, n2, is_open):
     if n1 or n2:
         return not is_open
     return is_open
-
-
 
 if __name__=='__main__':
 	#app.run()    
