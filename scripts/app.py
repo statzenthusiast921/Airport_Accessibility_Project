@@ -1182,8 +1182,8 @@ def network_node_detail_panel(selection, connection_type, focus_airport, meta):
     elif info.get("proximity_neighbors"):
         body.append(html.P(
             (
-                f"Nearby airports in this view (links capped at "
-                f"{PROXIMITY_EDGE_MAX_MILES:.0f} mi in source data; chart keeps shorter links first)."
+                f"Nearby airport links in this view are capped at "
+                f"{PROXIMITY_EDGE_MAX_MILES:.0f} mi."
             ),
             style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
         ))
@@ -1195,8 +1195,7 @@ def network_node_detail_panel(selection, connection_type, focus_airport, meta):
     elif info.get("shared_dest_peers"):
         body.append(html.P(
             "Raw overlap: each link counts destinations that appear in both airports' outbound route lists "
-            "(same destination IATA from each hub). This is the unadjusted count — large hubs tend to "
-            "score higher simply because they serve more cities.",
+            "This is the unadjusted count; large hubs tend to score higher because they serve more cities.",
             style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
         ))
         body.append(html.P(html.Strong("Peers (Raw Overlap Counts)"), style={"marginBottom": "6px", "color": "#fff"}))
@@ -1206,8 +1205,8 @@ def network_node_detail_panel(selection, connection_type, focus_airport, meta):
         ))
     elif info.get("shared_cosine_peers"):
         body.append(html.P(
-            "Hub-adjusted overlap: the same shared-destination idea as the raw count, but scaled by each airport's "
-            "destination-count footprint so mega-hubs do not automatically dominate every comparison.",
+            "Hub-adjusted overlap: the same shared destination raw count, but scaled by the destination counts for each airport;"
+            " so mega-hubs do not automatically dominate every comparison.",
             style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
         ))
         body.append(html.P(html.Strong("Peers (Hub-Adjusted Scores)"), style={"marginBottom": "6px", "color": "#fff"}))

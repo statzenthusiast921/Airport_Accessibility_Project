@@ -861,10 +861,10 @@ def _build_shared_destinations(
 
     if node_meta_key == "shared_dest_peers":
         line_fn = lambda name, code, w: (
-            f"{name}: {int(w)} overlapping destinations (raw count)"
+            f"{name}: {int(w)}"
         )
     else:
-        line_fn = lambda name, code, w: f"{name} — hub-adjusted score {float(w):.3f}"
+        line_fn = lambda name, code, w: f"{name}: {float(w):.3f}"
 
     peer_lines = _peer_lines_from_edges(edges, line_fn, sort_descending=True)
 
