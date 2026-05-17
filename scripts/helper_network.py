@@ -125,11 +125,11 @@ def strongest_similarity_label(filtered):
     max_w = filtered["weight"].max()
     top = filtered.loc[filtered["weight"] == max_w].sort_values(["source", "target"])
     row = top.iloc[0]
-    return f"{round(float(row['weight']), 3)} ({row['source']}–{row['target']})"
+    return f"{round(float(row['weight']), 3)} ({row['source']}-{row['target']})"
 
 
 def similarity_feature_distance(iata_a, iata_b):
-    """Equal-weight linear combo of |Δz| for connectivity, log(1+dests), and redundancy."""
+    """Equal-weight linear combo for connectivity, log(1+dests), and redundancy."""
     pa = SIMILARITY_AIRPORT_PROFILE.get(iata_a)
     pb = SIMILARITY_AIRPORT_PROFILE.get(iata_b)
     if not pa or not pb:
@@ -139,7 +139,7 @@ def similarity_feature_distance(iata_a, iata_b):
 
 
 def apply_similarity_scores(edges_df):
-    """Replace edge weights with 0–1 similarity (1 = most alike in this edge set)."""
+    """Replace edge weights with 0-1 similarity (1 = most alike in this edge set)."""
     if edges_df.empty:
         return edges_df
     out = edges_df.copy()
@@ -741,7 +741,7 @@ def build_proximity(selected_country, focus_airport):
     peer_color = NETWORK_PEER_NODE_COLOR["proximity"]
     neighbor_lines = _peer_lines_from_edges(
         edges,
-        lambda name, code, miles: f"{name} — {miles:.1f} mi",
+        lambda name, code, miles: f"{name}: {miles:.1f} mi",
         sort_descending=False,
     )
 
@@ -861,7 +861,7 @@ def _build_shared_destinations(
 
     if node_meta_key == "shared_dest_peers":
         line_fn = lambda name, code, w: (
-            f"{name} — {int(w)} overlapping destinations (raw count)"
+            f"{name}: {int(w)} overlapping destinations (raw count)"
         )
     else:
         line_fn = lambda name, code, w: f"{name} — hub-adjusted score {float(w):.3f}"

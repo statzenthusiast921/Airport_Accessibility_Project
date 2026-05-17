@@ -545,11 +545,13 @@ app.layout = html.Div([
                 html.Div(id='conn-metric-cards'),
                 dbc.Row([
                     dbc.Col([
-                        html.P(
-                            "Tip: use the network toolbar to zoom and fit. "
-                            "Yellow nodes are airports in the selected country; other colors are connection peers. "
-                            "The hub-adjusted destination view scales overlap so mega-hubs do not dominate every link.",
-                            style={
+                        html.P([
+                            html.Strong("Note: "),
+                            "Shared Destinations uses the raw count: how many cities both airports fly to.",
+                            " Hub-Adjusted uses the same count",
+                            ", but divides by square root(destinations at airport A X destinations at airport B) so overlap is compared fairly when one airport serves many more cities.",
+                        ],
+                        style={
                                 "color": "rgba(244,246,251,0.82)",
                                 "fontSize": "0.88rem",
                                 "marginTop": "4px",
@@ -1197,7 +1199,7 @@ def network_node_detail_panel(selection, connection_type, focus_airport, meta):
             "score higher simply because they serve more cities.",
             style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
         ))
-        body.append(html.P(html.Strong("Peers — raw overlap counts"), style={"marginBottom": "6px", "color": "#fff"}))
+        body.append(html.P(html.Strong("Peers (Raw Overlap Counts)"), style={"marginBottom": "6px", "color": "#fff"}))
         body.append(html.Ul(
             [html.Li(a) for a in info.get("shared_dest_peers") or []],
             style={"maxHeight": "320px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
@@ -1208,7 +1210,7 @@ def network_node_detail_panel(selection, connection_type, focus_airport, meta):
             "destination-count footprint so mega-hubs do not automatically dominate every comparison.",
             style={"marginBottom": "8px", "fontSize": "0.95rem", "color": "rgba(255,255,255,0.92)"},
         ))
-        body.append(html.P(html.Strong("Peers — hub-adjusted scores"), style={"marginBottom": "6px", "color": "#fff"}))
+        body.append(html.P(html.Strong("Peers (Hub-Adjusted Scores)"), style={"marginBottom": "6px", "color": "#fff"}))
         body.append(html.Ul(
             [html.Li(a) for a in info.get("shared_cosine_peers") or []],
             style={"maxHeight": "320px", "overflowY": "auto", "paddingLeft": "20px", "color": "#e8ecf4"},
