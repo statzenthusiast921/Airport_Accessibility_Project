@@ -3,8 +3,11 @@
 import pandas as pd
 import numpy as np
 
-#-----Read in and set up data
-airport_df = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/master_air.parquet')
+#-----Read in and set up data (always from GitHub)
+airport_df = pd.read_parquet(
+    "https://raw.githubusercontent.com/statzenthusiast921/"
+    "Airport_Accessibility_Project/main/data/master_air.parquet"
+)
 
 #-----One lookup for IATA to country (avoid huge merge joins on edge tables with 1000s of rows)
 IATA_TO_COUNTRY = (
@@ -20,7 +23,10 @@ def attach_country_columns_to_edges(edges_df):
     return out
 
 
-graph1 = pd.read_parquet('https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_airline_airport.parquet')
+graph1 = pd.read_parquet(
+    "https://raw.githubusercontent.com/statzenthusiast921/"
+    "Airport_Accessibility_Project/main/data/edges_airline_airport.parquet"
+)
 airport_df1 = airport_df[['iata','country','display_name']].drop_duplicates()
 airport_df1.rename(columns={'iata':'airport'}, inplace=True)
 graph1_merged = pd.merge(graph1, airport_df1, on ='airport')
@@ -55,8 +61,12 @@ def build_similarity_airport_profiles():
     ap["num_dests"] = pd.to_numeric(ap["num_dests"], errors="coerce").fillna(0).astype(int)
     ap["connectivity_index"] = pd.to_numeric(ap["connectivity_index"], errors="coerce").fillna(0.0)
     ap["redundancy_score"] = pd.to_numeric(ap["redundancy_score"], errors="coerce").fillna(0.0)
+    if "elevation" in ap.columns:
+        ap["elevation"] = pd.to_numeric(ap["elevation"], errors="coerce").fillna(0.0)
+    else:
+        ap["elevation"] = 0.0
     ap["log1p_num_dests"] = np.log1p(ap["num_dests"].to_numpy(dtype=float))
-    z_cols = ["connectivity_index", "log1p_num_dests", "redundancy_score"]
+    z_cols = ["connectivity_index", "log1p_num_dests", "redundancy_score", "elevation"]
     mat = ap[z_cols].to_numpy(dtype=float)
     mu = mat.mean(axis=0)
     sig = mat.std(axis=0)
@@ -68,9 +78,11 @@ def build_similarity_airport_profiles():
             "connectivity_index": float(mat[i, 0]),
             "redundancy_score": float(mat[i, 2]),
             "num_dests": int(ap["num_dests"].iloc[i]),
+            "elevation": float(mat[i, 3]),
             "z_connectivity_index": float(z_mat[i, 0]),
             "z_log1p_num_dests": float(z_mat[i, 1]),
             "z_redundancy_score": float(z_mat[i, 2]),
+            "z_elevation": float(z_mat[i, 3]),
         }
     return profiles
 
@@ -81,26 +93,33 @@ SIMILARITY_Z_FEATURE_KEYS = (
     "z_connectivity_index",
     "z_log1p_num_dests",
     "z_redundancy_score",
+    "z_elevation",
 )
 
 
-graph2 = pd.read_parquet("https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_feature_similarity.parquet")
+graph2 = pd.read_parquet(
+    "https://raw.githubusercontent.com/statzenthusiast921/"
+    "Airport_Accessibility_Project/main/data/edges_feature_similarity.parquet"
+)
 graph2_merged = attach_country_columns_to_edges(graph2)
 
-graph3 = pd.read_parquet("https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/edges_proximity.parquet")
+graph3 = pd.read_parquet(
+    "https://raw.githubusercontent.com/statzenthusiast921/"
+    "Airport_Accessibility_Project/main/data/edges_proximity.parquet"
+)
 graph3_merged = attach_country_columns_to_edges(graph3)
 
 # Upper bound used when building edges_proximity.parquet (great-circle miles).
 PROXIMITY_EDGE_MAX_MILES = 250.0
 
 SHARED_DESTINATIONS_PARQUET_URL = (
-    "https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/"
-    "edges_shared_destinations.parquet"
+    "https://raw.githubusercontent.com/statzenthusiast921/"
+    "Airport_Accessibility_Project/main/data/edges_shared_destinations.parquet"
 )
 
 SHARED_DESTINATIONS_COSINE_PARQUET_URL = (
-    "https://raw.githubusercontent.com/statzenthusiast921/Airport_Accessibility_Project/main/data/"
-    "edges_shared_destinations_cosine.parquet"
+    "https://raw.githubusercontent.com/statzenthusiast921/"
+    "Airport_Accessibility_Project/main/data/edges_shared_destinations_cosine.parquet"
 )
 
 #-----Loaded on first use only; keeps app startup responsive
@@ -156,8 +175,8 @@ CONNECTION_TYPE_DEFINITIONS = [
     ),
     (
         "Statistical Similarity",
-        "Airports linked when connectivity index, redundancy score, and destination count "
-        "are alike (z-scored, then compared). Link scores are 0–1 (higher = more similar).",
+        "Airports linked when connectivity index, redundancy score, destination count, "
+        "and elevation are alike (z-scored, then compared). Link scores are 0–1 (higher = more similar).",
     ),
     (
         "Proximity",

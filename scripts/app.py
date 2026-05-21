@@ -545,13 +545,14 @@ app.layout = html.Div([
                 html.Div(id='conn-metric-cards'),
                 dbc.Row([
                     dbc.Col([
-                        html.P([
-                            html.Strong("Note: "),
-                            "Shared Destinations uses the raw count: how many cities both airports fly to.",
-                            " Hub-Adjusted uses the same count",
-                            ", but divides by square root(destinations at airport A X destinations at airport B) so overlap is compared fairly when one airport serves many more cities.",
-                        ],
-                        style={
+                        html.P(
+                            [
+                                html.Strong("Note: "),
+                                "Shared Destinations uses the raw count: how many cities both airports fly to.",
+                                " Hub-Adjusted uses the same count",
+                                ", but divides by square root(destinations at airport A X destinations at airport B) so overlap is compared fairly when one airport serves many more cities.",
+                            ],
+                            style={
                                 "color": "rgba(244,246,251,0.82)",
                                 "fontSize": "0.88rem",
                                 "marginTop": "4px",
@@ -803,7 +804,7 @@ def update_dest_table(selected_airport):
     Output('dropdown4', 'value'),
     Input('dropdown3', 'value') #--> choose counry
 )
-def set_airport_options(selected_country):
+def set_airline_airport_options(selected_country):
     airports = country_airport_dict[selected_country]
     options = [{'label': format_airport_label(i), 'value': i} for i in airports]
     return options, airports[0]
@@ -1261,4 +1262,4 @@ def toggle_modal3(n1, n2, is_open):
 
 if __name__=='__main__':
 	#app.run()    
-    app.run(port=8051)
+    app.run(port=8052)

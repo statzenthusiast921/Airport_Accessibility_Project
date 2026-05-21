@@ -129,7 +129,7 @@ def strongest_similarity_label(filtered):
 
 
 def similarity_feature_distance(iata_a, iata_b):
-    """Equal-weight linear combo for connectivity, log(1+dests), and redundancy."""
+    """Equal-weight mean of |Δz| for connectivity, log(1+dests), redundancy, and elevation."""
     pa = SIMILARITY_AIRPORT_PROFILE.get(iata_a)
     pb = SIMILARITY_AIRPORT_PROFILE.get(iata_b)
     if not pa or not pb:
@@ -195,6 +195,7 @@ def build_statistical_similarity_detail_body(info, focus_iata=None):
         ("Connectivity Index", "connectivity_index", False),
         ("Redundancy Index", "redundancy_score", False),
         ("# Destinations", "num_dests", True),
+        ("Elevation (ft)", "elevation", True),
     )
     focus_profile = (
         SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
