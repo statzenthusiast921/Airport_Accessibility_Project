@@ -1261,5 +1261,4 @@ def toggle_modal3(n1, n2, is_open):
     return is_open
 
 if __name__=='__main__':
-	#app.run()    
-    app.run(port=8052)
+	app.run()
