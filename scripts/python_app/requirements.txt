@@ -10,3 +10,4 @@ blinker==1.9.0
 setuptools==80.9.0
 pandas==2.3.2
 pyarrow>=15.0.0
+gunicorn==23.0.0
