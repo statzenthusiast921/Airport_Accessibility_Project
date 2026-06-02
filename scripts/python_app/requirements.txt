@@ -1,6 +1,9 @@
 Flask==3.0.3
 dash==2.18.2
-dash-bootstrap-components==2.0.4
+dash-bootstrap-components==1.6.0
+visdcc==0.0.50
+Flask==3.0.3
+Werkzeug==3.0.6
 plotly==6.3.0
 Werkzeug==3.0.6
 Jinja2==3.1.6
