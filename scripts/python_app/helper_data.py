@@ -3,17 +3,95 @@
 import pandas as pd
 import numpy as np
 
-#-----Read in and set up data (always from GitHub)
-airport_df = pd.read_parquet(
+GITHUB_DATA_BASE = (
     "https://raw.githubusercontent.com/statzenthusiast921/"
-    "Airport_Accessibility_Project/main/data/master_air.parquet"
+    "Airport_Accessibility_Project/main/data/"
 )
 
-#-----One lookup for IATA to country (avoid huge merge joins on edge tables with 1000s of rows)
-IATA_TO_COUNTRY = (
-    airport_df.drop_duplicates(subset=["iata"])
-    .set_index("iata")["country"]
+MASTER_AIR_PARQUET_URL = GITHUB_DATA_BASE + "master_air.parquet"
+EDGES_AIRLINE_AIRPORT_PARQUET_URL = GITHUB_DATA_BASE + "edges_airline_airport.parquet"
+EDGES_FEATURE_SIMILARITY_PARQUET_URL = GITHUB_DATA_BASE + "edges_feature_similarity.parquet"
+EDGES_PROXIMITY_PARQUET_URL = GITHUB_DATA_BASE + "edges_proximity.parquet"
+SHARED_DESTINATIONS_PARQUET_URL = GITHUB_DATA_BASE + "edges_shared_destinations.parquet"
+SHARED_DESTINATIONS_COSINE_PARQUET_URL = (
+    GITHUB_DATA_BASE + "edges_shared_destinations_cosine.parquet"
 )
+
+# Populated by app.py before initialize_derived_state() runs.
+airport_df = None
+graph1 = None
+graph2 = None
+graph3 = None
+merged_shared_destinations_edges = None
+merged_shared_destinations_cosine_edges = None
+
+IATA_TO_COUNTRY = None
+graph1_merged = None
+AIRLINE_IATA_TO_NAME = None
+AIRPORT_IATA_META = None
+SIMILARITY_AIRPORT_PROFILE = None
+graph2_merged = None
+graph3_merged = None
+dest_tbl = None
+country_choices = None
+airport_choices = None
+country_airport_dict = None
+
+# Upper bound used when building edges_proximity.parquet (great-circle miles).
+PROXIMITY_EDGE_MAX_MILES = 250.0
+
+SIMILARITY_Z_FEATURE_KEYS = (
+    "z_connectivity_index",
+    "z_log1p_num_dests",
+    "z_redundancy_score",
+    "z_elevation",
+)
+
+HOVER_COLS = [
+    "latitude",
+    "longitude",
+    "display_name",
+    "num_dests",
+    "redundancy_score",
+    "connectivity_index",
+]
+
+connection_type_choices = [
+    "Carriers",
+    "Statistical Similarity",
+    "Proximity",
+    "Shared Destinations",
+    "Shared Destinations (Hub-Adjusted)",
+]
+
+CONNECTION_TYPE_DEFINITIONS = [
+    (
+        "Carriers",
+        "Airlines linked to airports they fly to within the selected country. "
+        "Useful for seeing which carriers cluster at which hubs (after the top-carrier filter).",
+    ),
+    (
+        "Statistical Similarity",
+        "Airports linked when connectivity index, redundancy score, destination count, "
+        "and elevation are alike (z-scored, then compared). Link scores are 0–1 (higher = more similar).",
+    ),
+    (
+        "Proximity",
+        "Airports linked by short distance (within the proximity edge cap in the dataset). "
+        "Shows geographic neighbors, not airline overlap.",
+    ),
+    (
+        "Shared Destinations",
+        "Airports linked by how many destination cities they both serve (same destination IATA in both route lists). "
+        "The weight is the raw count — large hubs usually share more destinations simply because they fly everywhere.",
+    ),
+    (
+        "Shared Destinations (Hub-Adjusted)",
+        "Same underlying overlap as the raw count, but each link is scaled down when either airport serves "
+        "a very large number of destinations (cosine-style adjustment). "
+        "Makes overlap between a mega-hub and a mid-size airport easier to interpret fairly.",
+    ),
+]
 
 
 def attach_country_columns_to_edges(edges_df):
@@ -23,18 +101,9 @@ def attach_country_columns_to_edges(edges_df):
     return out
 
 
-graph1 = pd.read_parquet(
-    "https://raw.githubusercontent.com/statzenthusiast921/"
-    "Airport_Accessibility_Project/main/data/edges_airline_airport.parquet"
-)
-airport_df1 = airport_df[['iata','country','display_name']].drop_duplicates()
-airport_df1.rename(columns={'iata':'airport'}, inplace=True)
-graph1_merged = pd.merge(graph1, airport_df1, on ='airport')
-
-
-def build_airline_iata_to_name(airport_df):
+def build_airline_iata_to_name(airport_frame):
     mapping = {}
-    for carriers in airport_df["carriers"].dropna():
+    for carriers in airport_frame["carriers"].dropna():
         if not isinstance(carriers, (list, tuple, np.ndarray)):
             continue
         for c in carriers:
@@ -48,13 +117,6 @@ def build_airline_iata_to_name(airport_df):
                     mapping[code] = name
     return mapping
 
-
-AIRLINE_IATA_TO_NAME = build_airline_iata_to_name(airport_df)
-AIRPORT_IATA_META = (
-    airport_df.drop_duplicates(subset=["iata"])
-    .set_index("iata")[["display_name", "country"]]
-    .to_dict("index")
-)
 
 def build_similarity_airport_profiles():
     ap = airport_df.drop_duplicates(subset=["iata"]).copy()
@@ -87,48 +149,62 @@ def build_similarity_airport_profiles():
     return profiles
 
 
-SIMILARITY_AIRPORT_PROFILE = build_similarity_airport_profiles()
+def initialize_derived_state():
+    """Build lookups and merged edge tables from raw frames loaded in app.py."""
+    global IATA_TO_COUNTRY
+    global graph1_merged
+    global AIRLINE_IATA_TO_NAME
+    global AIRPORT_IATA_META
+    global SIMILARITY_AIRPORT_PROFILE
+    global graph2_merged
+    global graph3_merged
+    global dest_tbl
+    global country_choices
+    global airport_choices
+    global country_airport_dict
 
-SIMILARITY_Z_FEATURE_KEYS = (
-    "z_connectivity_index",
-    "z_log1p_num_dests",
-    "z_redundancy_score",
-    "z_elevation",
-)
+    IATA_TO_COUNTRY = (
+        airport_df.drop_duplicates(subset=["iata"])
+        .set_index("iata")["country"]
+    )
 
+    airport_df1 = airport_df[["iata", "country", "display_name"]].drop_duplicates()
+    airport_df1.rename(columns={"iata": "airport"}, inplace=True)
+    graph1_merged = pd.merge(graph1, airport_df1, on="airport")
 
-graph2 = pd.read_parquet(
-    "https://raw.githubusercontent.com/statzenthusiast921/"
-    "Airport_Accessibility_Project/main/data/edges_feature_similarity.parquet"
-)
-graph2_merged = attach_country_columns_to_edges(graph2)
+    AIRLINE_IATA_TO_NAME = build_airline_iata_to_name(airport_df)
+    AIRPORT_IATA_META = (
+        airport_df.drop_duplicates(subset=["iata"])
+        .set_index("iata")[["display_name", "country"]]
+        .to_dict("index")
+    )
+    SIMILARITY_AIRPORT_PROFILE = build_similarity_airport_profiles()
 
-graph3 = pd.read_parquet(
-    "https://raw.githubusercontent.com/statzenthusiast921/"
-    "Airport_Accessibility_Project/main/data/edges_proximity.parquet"
-)
-graph3_merged = attach_country_columns_to_edges(graph3)
+    graph2_merged = attach_country_columns_to_edges(graph2)
+    graph3_merged = attach_country_columns_to_edges(graph3)
 
-# Upper bound used when building edges_proximity.parquet (great-circle miles).
-PROXIMITY_EDGE_MAX_MILES = 250.0
+    dest_tbl = (
+        airport_df[
+            ["display_name", "dest_name", "dest_iata", "connectivity_index", "redundancy_score"]
+        ].rename(
+            columns={
+                "dest_name": "Destination",
+                "connectivity_index": "Connectivity Index",
+                "redundancy_score": "Redundancy Index",
+            }
+        )
+    )
 
-SHARED_DESTINATIONS_PARQUET_URL = (
-    "https://raw.githubusercontent.com/statzenthusiast921/"
-    "Airport_Accessibility_Project/main/data/edges_shared_destinations.parquet"
-)
+    country_choices = sorted(airport_df["country"].unique())
+    airport_choices = sorted(airport_df["display_name"].unique())
 
-SHARED_DESTINATIONS_COSINE_PARQUET_URL = (
-    "https://raw.githubusercontent.com/statzenthusiast921/"
-    "Airport_Accessibility_Project/main/data/edges_shared_destinations_cosine.parquet"
-)
-
-#-----Loaded on first use only; keeps app startup responsive
-merged_shared_destinations_edges = None
-merged_shared_destinations_cosine_edges = None
+    df_for_dict = airport_df[["country", "display_name"]]
+    df_for_dict = df_for_dict.drop_duplicates(subset="display_name", keep="first")
+    country_airport_dict = df_for_dict.groupby("country")["display_name"].apply(list).to_dict()
 
 
 def load_merged_shared_destinations_edges():
-    """Load shared-destination edges once; subsequent calls reuse the same DataFrame."""
+    """Load on first Connections-tab use (~97 MB); not loaded at app startup."""
     global merged_shared_destinations_edges
     if merged_shared_destinations_edges is None:
         raw = pd.read_parquet(SHARED_DESTINATIONS_PARQUET_URL)
@@ -137,71 +213,9 @@ def load_merged_shared_destinations_edges():
 
 
 def load_merged_shared_destinations_cosine_edges():
-    """Load cosine-weighted shared-destination edges once; subsequent calls reuse the same DataFrame."""
+    """Load on first Connections-tab use (~67 MB); not loaded at app startup."""
     global merged_shared_destinations_cosine_edges
     if merged_shared_destinations_cosine_edges is None:
         raw = pd.read_parquet(SHARED_DESTINATIONS_COSINE_PARQUET_URL)
         merged_shared_destinations_cosine_edges = attach_country_columns_to_edges(raw)
     return merged_shared_destinations_cosine_edges
-
-
-dest_tbl = (
-    airport_df[["display_name", "dest_name",'dest_iata', "connectivity_index", "redundancy_score"]].rename(
-        columns={
-            "dest_name": "Destination",
-            "connectivity_index": "Connectivity Index",
-            "redundancy_score": "Redundancy Index",
-        }
-    )
-)
-
-# ----- Set up choices for dropdown menus
-country_choices = sorted(airport_df['country'].unique())
-airport_choices = sorted(airport_df['display_name'].unique())
-connection_type_choices = [
-    "Carriers",
-    "Statistical Similarity",
-    "Proximity",
-    "Shared Destinations",
-    "Shared Destinations (Hub-Adjusted)",
-]
-
-#----- Label defintions for connection types
-CONNECTION_TYPE_DEFINITIONS = [
-    (
-        "Carriers",
-        "Airlines linked to airports they fly to within the selected country. "
-        "Useful for seeing which carriers cluster at which hubs (after the top-carrier filter).",
-    ),
-    (
-        "Statistical Similarity",
-        "Airports linked when connectivity index, redundancy score, destination count, "
-        "and elevation are alike (z-scored, then compared). Link scores are 0–1 (higher = more similar).",
-    ),
-    (
-        "Proximity",
-        "Airports linked by short distance (within the proximity edge cap in the dataset). "
-        "Shows geographic neighbors, not airline overlap.",
-    ),
-    (
-        "Shared Destinations",
-        "Airports linked by how many destination cities they both serve (same destination IATA in both route lists). "
-        "The weight is the raw count — large hubs usually share more destinations simply because they fly everywhere.",
-    ),
-    (
-        "Shared Destinations (Hub-Adjusted)",
-        "Same underlying overlap as the raw count, but each link is scaled down when either airport serves "
-        "a very large number of destinations (cosine-style adjustment). "
-        "Makes overlap between a mega-hub and a mid-size airport easier to interpret fairly.",
-    ),
-]
-
-#----- Counry --> Airport Dictionary
-df_for_dict = airport_df[['country','display_name']]
-df_for_dict = df_for_dict.drop_duplicates(subset='display_name',keep='first')
-country_airport_dict = df_for_dict.groupby('country')['display_name'].apply(list).to_dict()
-
-HOVER_COLS = [
-    'latitude', 'longitude', 'display_name',
-    'num_dests', 'redundancy_score', 'connectivity_index',
-]

@@ -10,15 +10,16 @@ from dash import dash_table
 import plotly.graph_objects as go
 import math
 import visdcc
+import helper_data
 from helper_data import (
-    airport_df,
-    dest_tbl,
-    country_choices,
-    airport_choices,
-    connection_type_choices,
-    country_airport_dict,
     HOVER_COLS,
     PROXIMITY_EDGE_MAX_MILES,
+    connection_type_choices,
+    EDGES_AIRLINE_AIRPORT_PARQUET_URL,
+    EDGES_FEATURE_SIMILARITY_PARQUET_URL,
+    EDGES_PROXIMITY_PARQUET_URL,
+    MASTER_AIR_PARQUET_URL,
+    initialize_derived_state,
 )
 from helper_functions import (
     great_circle_points,
@@ -60,6 +61,31 @@ from helper_network import (
 
 
 
+
+# ----- Load datasets from GitHub (all parquet downloads happen here)
+helper_data.airport_df = pd.read_parquet(MASTER_AIR_PARQUET_URL)
+print(helper_data.airport_df.memory_usage(deep=True).sum() / 1024**2)
+
+helper_data.graph1 = pd.read_parquet(EDGES_AIRLINE_AIRPORT_PARQUET_URL)
+print(helper_data.graph1.memory_usage(deep=True).sum() / 1024**2)
+
+helper_data.graph2 = pd.read_parquet(EDGES_FEATURE_SIMILARITY_PARQUET_URL)
+print(helper_data.graph2.memory_usage(deep=True).sum() / 1024**2)
+
+helper_data.graph3 = pd.read_parquet(EDGES_PROXIMITY_PARQUET_URL)
+print(helper_data.graph3.memory_usage(deep=True).sum() / 1024**2)
+
+initialize_derived_state()
+# Shared-destination edge tables load lazily via helper_data on first Connections use (~164 MB saved at startup).
+del helper_data.graph1
+del helper_data.graph2
+del helper_data.graph3
+
+airport_df = helper_data.airport_df
+dest_tbl = helper_data.dest_tbl
+country_choices = helper_data.country_choices
+airport_choices = helper_data.airport_choices
+country_airport_dict = helper_data.country_airport_dict
 
 #----- Define style for different pages in app
 tabs_styles = {
@@ -1261,4 +1287,5 @@ def toggle_modal3(n1, n2, is_open):
     return is_open
 
 if __name__=='__main__':
-	app.run()
+	#app.run()    
+    app.run(port=8052)

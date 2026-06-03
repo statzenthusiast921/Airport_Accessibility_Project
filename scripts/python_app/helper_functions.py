@@ -8,7 +8,7 @@ import pandas as pd
 from dash import html
 import dash_bootstrap_components as dbc
 
-from helper_data import AIRPORT_IATA_META, airport_df
+import helper_data
 
 # Legacy master_air display_name: "City (IATA), Country" → "City, Country (IATA)"
 AIRPORT_DISPLAY_RE = re.compile(r"^(.+)\s+\(([A-Z0-9]{3})\)\s*,\s*(.+)$")
@@ -37,7 +37,7 @@ def format_airport_label(display_name=None, *, city=None, country=None, iata=Non
 
 
 def format_airport_label_from_iata(iata):
-    meta = AIRPORT_IATA_META.get(iata) or {}
+    meta = helper_data.AIRPORT_IATA_META.get(iata) or {}
     return format_airport_label(
         display_name=meta.get("display_name"),
         country=meta.get("country"),
@@ -175,7 +175,7 @@ def build_metric_card_body(title, value, font_size="1.8rem"):
 
 def dominant_airline_share_at_iata(iata):
     """Dominant carrier by frequency in airport carrier lists (airline_stats tab logic)."""
-    ap_rows = airport_df[airport_df["iata"] == iata]
+    ap_rows = helper_data.airport_df[helper_data.airport_df["iata"] == iata]
     if ap_rows.empty:
         return None, None
     names = ap_rows["carriers"].apply(extract_airline_names).explode().dropna()
@@ -249,7 +249,9 @@ AIRLINE_MAP_COLORS = [
 
 
 def prepare_country_airline_data(selected_country):
-    country_filtered = airport_df[airport_df['country'] == selected_country].copy()
+    country_filtered = helper_data.airport_df[
+        helper_data.airport_df["country"] == selected_country
+    ].copy()
     country_filtered["airline_names"] = country_filtered["carriers"].apply(
         extract_airline_names
     )

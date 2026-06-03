@@ -6,19 +6,7 @@ import visdcc
 from dash import html
 import dash_bootstrap_components as dbc
 
-from helper_data import (
-    AIRLINE_IATA_TO_NAME,
-    AIRPORT_IATA_META,
-    CONNECTION_TYPE_DEFINITIONS,
-    PROXIMITY_EDGE_MAX_MILES,
-    SIMILARITY_AIRPORT_PROFILE,
-    SIMILARITY_Z_FEATURE_KEYS,
-    graph1_merged,
-    graph2_merged,
-    graph3_merged,
-    load_merged_shared_destinations_edges,
-    load_merged_shared_destinations_cosine_edges,
-)
+import helper_data
 import numpy as np
 
 from helper_functions import (
@@ -67,7 +55,7 @@ MAX_NETWORK_EDGES = 100
 
 def airport_node_sizes_and_color(iata, selected_country, peer_hex):
     """Larger yellow node if airport is in the selected country; otherwise peer color."""
-    meta_ct = (AIRPORT_IATA_META.get(iata) or {}).get("country")
+    meta_ct = (helper_data.AIRPORT_IATA_META.get(iata) or {}).get("country")
     if meta_ct == selected_country:
         return NETWORK_CENTRAL_NODE_COLOR, 15
     return peer_hex, 12
@@ -83,7 +71,7 @@ def filter_airport_edges(df, focus_iata):
 def countries_in_node_set(node_ids):
     countries = set()
     for iata in node_ids:
-        ct = (AIRPORT_IATA_META.get(iata) or {}).get("country")
+        ct = (helper_data.AIRPORT_IATA_META.get(iata) or {}).get("country")
         if ct:
             countries.add(ct)
     return len(countries)
@@ -130,11 +118,11 @@ def strongest_similarity_label(filtered):
 
 def similarity_feature_distance(iata_a, iata_b):
     """Equal-weight mean of |Δz| for connectivity, log(1+dests), redundancy, and elevation."""
-    pa = SIMILARITY_AIRPORT_PROFILE.get(iata_a)
-    pb = SIMILARITY_AIRPORT_PROFILE.get(iata_b)
+    pa = helper_data.SIMILARITY_AIRPORT_PROFILE.get(iata_a)
+    pb = helper_data.SIMILARITY_AIRPORT_PROFILE.get(iata_b)
     if not pa or not pb:
         return np.nan
-    diffs = [abs(pa[k] - pb[k]) for k in SIMILARITY_Z_FEATURE_KEYS]
+    diffs = [abs(pa[k] - pb[k]) for k in helper_data.SIMILARITY_Z_FEATURE_KEYS]
     return float(sum(diffs) / len(diffs))
 
 
@@ -170,7 +158,7 @@ def similarity_pct_diff_vs_focus(clicked_val, focus_val):
 
 
 def build_statistical_similarity_detail_body(info, focus_iata=None):
-    profile = SIMILARITY_AIRPORT_PROFILE.get(info.get("iata"))
+    profile = helper_data.SIMILARITY_AIRPORT_PROFILE.get(info.get("iata"))
     if not profile:
         return [
             html.P("Profile data unavailable for this airport.", style={"color": "#e8ecf4"}),
@@ -178,9 +166,9 @@ def build_statistical_similarity_detail_body(info, focus_iata=None):
 
     body = []
     if focus_iata and focus_iata != CONN_AIRPORT_ALL:
-        focus_profile = SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
+        focus_profile = helper_data.SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
         if focus_profile:
-            focus_meta = AIRPORT_IATA_META.get(focus_iata) or {}
+            focus_meta = helper_data.AIRPORT_IATA_META.get(focus_iata) or {}
             focus_name = format_airport_label_from_iata(focus_iata)
             body.append(html.P(
                 f"Compared to focus airport: {focus_name}",
@@ -198,7 +186,7 @@ def build_statistical_similarity_detail_body(info, focus_iata=None):
         ("Elevation (ft)", "elevation", True),
     )
     focus_profile = (
-        SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
+        helper_data.SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
         if focus_iata and focus_iata != CONN_AIRPORT_ALL
         else None
     )
@@ -314,7 +302,7 @@ def carrier_network_physics_options():
 def build_connection_types_guide(active_connection_type):
     """Short definitions for the Connections tab sidebar."""
     blocks = []
-    for title, blurb in CONNECTION_TYPE_DEFINITIONS:
+    for title, blurb in helper_data.CONNECTION_TYPE_DEFINITIONS:
         is_active = title == active_connection_type
         blocks.append(
             html.Div(
@@ -445,7 +433,7 @@ def _filter_edges_by_focus(edges_df, focus_airport):
 
 
 def _airport_meta(iata):
-    meta = AIRPORT_IATA_META.get(iata) or {}
+    meta = helper_data.AIRPORT_IATA_META.get(iata) or {}
     country = meta.get("country") or "—"
     name = format_airport_label_from_iata(iata)
     return name, country
@@ -507,7 +495,7 @@ def _peer_lines_from_edges(edges_df, line_formatter, sort_descending=True):
 # --------------------#
 
 def build_carriers(selected_country, focus_airport):
-    routes = graph1_merged.loc[graph1_merged["country"] == selected_country].copy()
+    routes = helper_data.graph1_merged.loc[helper_data.graph1_merged["country"] == selected_country].copy()
     if routes.empty:
         return _no_data("No data available for this selection")
 
@@ -529,7 +517,7 @@ def build_carriers(selected_country, focus_airport):
     node_meta = {}
 
     for airline in airline_list:
-        legal_name = AIRLINE_IATA_TO_NAME.get(airline)
+        legal_name = helper_data.AIRLINE_IATA_TO_NAME.get(airline)
         label = legal_name if legal_name else airline
         airport_codes = routes.loc[routes["airline"] == airline, "airport"].unique().tolist()
         airport_codes.sort()
@@ -563,7 +551,7 @@ def build_carriers(selected_country, focus_airport):
         airline_codes.sort()
         airline_labels = []
         for code in airline_codes:
-            nm = AIRLINE_IATA_TO_NAME.get(code)
+            nm = helper_data.AIRLINE_IATA_TO_NAME.get(code)
             airline_labels.append(f"{nm} ({code})" if nm else str(code))
         node_meta[airport] = {
             "kind": "airport",
@@ -651,7 +639,7 @@ def build_carriers(selected_country, focus_airport):
 # ---------------------------------- #
 
 def build_similarity(selected_country, focus_airport):
-    edges = graph2_merged.loc[graph2_merged["source_country"] == selected_country].copy()
+    edges = helper_data.graph2_merged.loc[helper_data.graph2_merged["source_country"] == selected_country].copy()
     edges = _filter_edges_by_focus(edges, focus_airport)
     if edges.empty:
         return _no_data(
@@ -725,7 +713,7 @@ def build_similarity(selected_country, focus_airport):
 # --------------------- #
 
 def build_proximity(selected_country, focus_airport):
-    edges = graph3_merged.loc[graph3_merged["source_country"] == selected_country].copy()
+    edges = helper_data.graph3_merged.loc[helper_data.graph3_merged["source_country"] == selected_country].copy()
     edges = _filter_edges_by_focus(edges, focus_airport)
     if edges.empty:
         return _no_data(
@@ -763,7 +751,7 @@ def build_proximity(selected_country, focus_airport):
             "label": airport_network_display_label(iata),
             "title": (
                 f"{name}\n"
-                f"Edges: within {PROXIMITY_EDGE_MAX_MILES:.0f} mi (data cap)"
+                f"Edges: within {helper_data.PROXIMITY_EDGE_MAX_MILES:.0f} mi (data cap)"
             ),
             "color": color,
             "shape": "dot",
@@ -785,7 +773,7 @@ def build_proximity(selected_country, focus_airport):
             "from": source,
             "to": target,
             "width": width,
-            "title": f"Distance: {miles:.1f} mi (≤{PROXIMITY_EDGE_MAX_MILES:.0f} mi layer)",
+            "title": f"Distance: {miles:.1f} mi (≤{helper_data.PROXIMITY_EDGE_MAX_MILES:.0f} mi layer)",
             "color": {"color": "#4ADE80", "opacity": 0.78},
         })
 
@@ -945,7 +933,7 @@ def build_shared_destinations_raw(selected_country, focus_airport):
     result = _build_shared_destinations(
         selected_country,
         focus_airport,
-        load_merged_shared_destinations_edges,
+        helper_data.load_merged_shared_destinations_edges,
         "shared_raw",
         "shared_dest_peers",
         lambda w: f"Raw overlap: {int(w)} shared destinations",
@@ -967,7 +955,7 @@ def build_shared_destinations_adjusted(selected_country, focus_airport):
     result = _build_shared_destinations(
         selected_country,
         focus_airport,
-        load_merged_shared_destinations_cosine_edges,
+        helper_data.load_merged_shared_destinations_cosine_edges,
         "shared_cosine",
         "shared_cosine_peers",
         lambda w: f"Hub-adjusted destination overlap: {float(w):.3f}",
