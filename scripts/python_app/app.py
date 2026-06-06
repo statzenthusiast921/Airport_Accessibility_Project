@@ -237,7 +237,7 @@ app.layout = html.Div([
                             className="border-secondary",
                             style={"backgroundColor": "#000000"},
                         )
-                    ], id="modal1", size="xl", scrollable=True, content_style={"backgroundColor": "#000000"})
+                    ], id="modal1", size="xl", scrollable=True)
                 ], className="w-100"),
                 dbc.Row([
                     dbc.Col([
@@ -324,7 +324,7 @@ app.layout = html.Div([
                             className="border-secondary",
                             style={"backgroundColor": "#000000"},
                         )
-                    ], id="modal2", size="xl", scrollable=True, content_style={"backgroundColor": "#000000"})
+                    ], id="modal2", size="xl", scrollable=True)
                 ], className="w-100"),
                 dbc.Row([
                     dbc.Col([
@@ -514,7 +514,7 @@ app.layout = html.Div([
                             className="border-secondary",
                             style={"backgroundColor": "#000000"},
                         )
-                    ], id="modal3", size="xl", scrollable=True, content_style={"backgroundColor": "#000000"})
+                    ], id="modal3", size="xl", scrollable=True)
                 ], className="w-100"),
 
              
