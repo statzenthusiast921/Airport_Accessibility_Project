@@ -175,6 +175,7 @@ def build_metric_card_body(title, value, font_size="1.8rem"):
 
 def dominant_airline_share_at_iata(iata):
     """Dominant carrier by frequency in airport carrier lists (airline_stats tab logic)."""
+    helper_data.ensure_full_airport_df()
     ap_rows = helper_data.airport_df[helper_data.airport_df["iata"] == iata]
     if ap_rows.empty:
         return None, None
@@ -249,6 +250,7 @@ AIRLINE_MAP_COLORS = [
 
 
 def prepare_country_airline_data(selected_country):
+    helper_data.ensure_full_airport_df()
     country_key = str(selected_country)
     country_filtered = helper_data.airport_df[
         helper_data.airport_df["country"].astype(str) == country_key

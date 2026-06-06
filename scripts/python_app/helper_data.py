@@ -1,5 +1,7 @@
 """Airport graph data loading and lookups."""
 
+import gc
+
 import pandas as pd
 import numpy as np
 
@@ -19,7 +21,13 @@ EDGES_SHARED_DESTINATIONS_COSINE_MERGED_URL = (
     GITHUB_DATA_BASE + "edges_shared_destinations_cosine_merged.parquet"
 )
 
+CONN_AIRPORT_ALL = "__ALL__"
+
+# Slim columns for gunicorn startup (dropdowns / labels only).
+STARTUP_AIRPORT_COLUMNS = ["iata", "country", "display_name", "name"]
+
 airport_df = None
+_full_airport_loaded = False
 carriers_edges = None
 similarity_edges = None
 proximity_edges = None
@@ -142,7 +150,30 @@ def optimize_airport_df_memory(df):
     return df
 
 
+def load_startup_airport_index():
+    """Load minimal airport columns for Render startup (avoids full master_air in RAM)."""
+    global airport_df
+    airport_df = pd.read_parquet(MASTER_AIR_PARQUET_URL, columns=STARTUP_AIRPORT_COLUMNS)
+    for col in STARTUP_AIRPORT_COLUMNS:
+        if col in airport_df.columns and airport_df[col].dtype == object:
+            airport_df[col] = airport_df[col].astype(str)
+
+
+def ensure_full_airport_df():
+    """Load route-level master_air on first Airport / Airline Metrics use."""
+    global airport_df, _full_airport_loaded
+    if _full_airport_loaded:
+        return airport_df
+    full = pd.read_parquet(MASTER_AIR_PARQUET_URL)
+    optimize_airport_df_memory(full)
+    airport_df = full
+    _full_airport_loaded = True
+    gc.collect()
+    return airport_df
+
+
 def dest_table_for_airport(display_name):
+    ensure_full_airport_df()
     mask = airport_df["display_name"] == display_name
     return airport_df.loc[
         mask,
@@ -202,6 +233,7 @@ def ensure_airline_iata_to_name():
     """Built on first Carriers network view (scans carriers column)."""
     global AIRLINE_IATA_TO_NAME
     if AIRLINE_IATA_TO_NAME is None:
+        ensure_full_airport_df()
         AIRLINE_IATA_TO_NAME = build_airline_iata_to_name(airport_df)
     return AIRLINE_IATA_TO_NAME
 
@@ -210,6 +242,7 @@ def ensure_similarity_profiles():
     """Built on first Statistical Similarity view (heavy; not at app startup)."""
     global SIMILARITY_AIRPORT_PROFILE
     if SIMILARITY_AIRPORT_PROFILE is None:
+        ensure_full_airport_df()
         SIMILARITY_AIRPORT_PROFILE = build_similarity_airport_profiles()
     return SIMILARITY_AIRPORT_PROFILE
 

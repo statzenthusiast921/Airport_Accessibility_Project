@@ -13,13 +13,14 @@ import math
 import visdcc
 import helper_data
 from helper_data import (
+    CONN_AIRPORT_ALL,
     HOVER_COLS,
     PROXIMITY_EDGE_MAX_MILES,
     connection_type_choices,
-    MASTER_AIR_PARQUET_URL,
     dest_table_for_airport,
+    ensure_full_airport_df,
     initialize_core_state,
-    optimize_airport_df_memory,
+    load_startup_airport_index,
 )
 from helper_functions import (
     great_circle_points,
@@ -50,25 +51,15 @@ from helper_functions import (
     format_airport_label,
     format_airport_label_from_iata,
 )
-from helper_network import (
-    build_network_connection,
-    build_connection_types_guide,
-    build_statistical_similarity_detail_body,
-    CONN_AIRPORT_ALL,
-)
 
 
 
 
-
-
-# ----- Startup: master_air only; pre-merged edge parquets load on first Connections use
-helper_data.airport_df = pd.read_parquet(MASTER_AIR_PARQUET_URL)
-optimize_airport_df_memory(helper_data.airport_df)
-print("airport_df MB:", helper_data.airport_df.memory_usage(deep=True).sum() / 1024**2)
-
+# ----- Startup: slim airport index only; full master_air loads on first Metrics tab use
+load_startup_airport_index()
 initialize_core_state()
 gc.collect()
+print("startup airport index MB:", helper_data.airport_df.memory_usage(deep=True).sum() / 1024**2)
 
 airport_df = helper_data.airport_df
 country_choices = helper_data.country_choices
@@ -626,14 +617,16 @@ def set_airport_options(selected_country):
 )
 
 def airport_selection_stats(selected_airport):
+    ensure_full_airport_df()
+    routes = helper_data.airport_df
     filtered = dest_table_for_airport(selected_airport)
-    filtered_again = airport_df[airport_df['display_name'] == selected_airport]
+    filtered_again = routes[routes['display_name'] == selected_airport]
 
     #----- Grab first 2 metrics from airport_df
     metric1 = filtered_again['num_dests'].unique()[0]
 
     diff_dests = filtered['dest_iata'].unique()
-    filtering_to_only_dests = airport_df[airport_df['iata'].isin(diff_dests)]
+    filtering_to_only_dests = routes[routes['iata'].isin(diff_dests)]
     metric2 = len(filtering_to_only_dests['country'].unique())
 
     #----- Grab last 2 metrics from destination table
@@ -654,9 +647,11 @@ def airport_selection_stats(selected_airport):
     Input('dropdown2', 'value'),
 )
 def destination_map(selected_airport):
-    available = [c for c in HOVER_COLS if c in airport_df.columns]
+    ensure_full_airport_df()
+    routes = helper_data.airport_df
+    available = [c for c in HOVER_COLS if c in routes.columns]
     coord_lookup = (
-        airport_df.drop_duplicates(subset='iata')
+        routes.drop_duplicates(subset='iata')
         .set_index('iata')[available]
         .assign(
             latitude=lambda x: pd.to_numeric(x['latitude'], errors='coerce'),
@@ -667,7 +662,7 @@ def destination_map(selected_airport):
         )
     )
 
-    origin_rows = airport_df[airport_df['display_name'] == selected_airport]
+    origin_rows = routes[routes['display_name'] == selected_airport]
     if origin_rows.empty:
         return go.Figure()
 
@@ -675,7 +670,7 @@ def destination_map(selected_airport):
     origin_lat  = float(origin_rows['latitude'].iloc[0])
     origin_lon  = float(origin_rows['longitude'].iloc[0])
 
-    dest_iatas = airport_df[airport_df['iata'] == origin_iata]['dest_iata'].dropna().unique()
+    dest_iatas = routes[routes['iata'] == origin_iata]['dest_iata'].dropna().unique()
     dest_info  = coord_lookup[coord_lookup.index.isin(dest_iatas)].reset_index()
 
     def make_customdata(df):
@@ -770,8 +765,10 @@ def destination_map(selected_airport):
     Input("dropdown2", "value"),
 )
 def update_dest_table(selected_airport):
+    ensure_full_airport_df()
+    routes = helper_data.airport_df
     filtered = dest_table_for_airport(selected_airport)
-    dest_metrics = airport_df[
+    dest_metrics = routes[
         ["display_name", "iata", "num_dests","redundancy_score", "connectivity_index"]
     ].drop_duplicates(subset=["display_name"])
 
@@ -830,8 +827,9 @@ def set_airline_airport_options(selected_country):
     Input('dropdown4', 'value'),
 )
 def airline_treemap_chart(selected_airport):
-
-    airport = airport_df[airport_df["display_name"] == selected_airport][["iata", "dest_iata", "carriers"]]
+    ensure_full_airport_df()
+    routes = helper_data.airport_df
+    airport = routes[routes["display_name"] == selected_airport][["iata", "dest_iata", "carriers"]]
     airport["airline_names"] = airport["carriers"].apply(
         lambda x: list({carrier["name"] for carrier in x})
     )
@@ -879,7 +877,9 @@ def airline_treemap_chart(selected_airport):
     Input('dropdown4', 'value'),
 )
 def airline_stats(selected_country, selected_airport):
-    country_filtered = airport_df[airport_df['country'] == selected_country].copy()
+    ensure_full_airport_df()
+    routes = helper_data.airport_df
+    country_filtered = routes[routes['country'].astype(str) == str(selected_country)].copy()
     country_filtered["airline_names"] = country_filtered["carriers"].apply(extract_airline_names)
     country_airlines = country_filtered["airline_names"].explode().dropna()
 
@@ -892,7 +892,7 @@ def airline_stats(selected_country, selected_airport):
         top_country_pct = country_counts.iloc[0] / country_counts.sum()
         metric2 = f"{top_country_airline} ({top_country_pct:.1%})"
 
-    airport_filtered = airport_df[airport_df['display_name'] == selected_airport].copy()
+    airport_filtered = routes[routes['display_name'] == selected_airport].copy()
     airport_filtered["airline_names"] = airport_filtered["carriers"].apply(extract_airline_names)
     airport_airlines = airport_filtered["airline_names"].explode().dropna()
     airport_code = (
@@ -1138,6 +1138,7 @@ def set_connections_airport_dropdown(selected_country):
     Input('dropdown_conn_airport', 'value'),
 )
 def network_connections(connection_type, selected_country, focus_airport):
+    from helper_network import build_network_connection
     return build_network_connection(connection_type, selected_country, focus_airport)
 
 @app.callback(
@@ -1148,6 +1149,10 @@ def network_connections(connection_type, selected_country, focus_airport):
     State('network-node-meta', 'data'),
 )
 def network_node_detail_panel(selection, connection_type, focus_airport, meta):
+    from helper_network import (
+        build_connection_types_guide,
+        build_statistical_similarity_detail_body,
+    )
     meta = meta or {}
     guide = build_connection_types_guide(connection_type)
     divider = html.Hr(
