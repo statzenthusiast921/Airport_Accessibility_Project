@@ -1,6 +1,7 @@
 """Airport graph data loading and lookups."""
 
 import gc
+import threading
 
 import pandas as pd
 import numpy as np
@@ -28,6 +29,9 @@ STARTUP_AIRPORT_COLUMNS = ["iata", "country", "display_name", "name"]
 
 airport_df = None
 _full_airport_loaded = False
+_full_airport_load_error = None
+_full_load_lock = threading.Lock()
+_edge_load_lock = threading.Lock()
 carriers_edges = None
 similarity_edges = None
 proximity_edges = None
@@ -161,15 +165,44 @@ def load_startup_airport_index():
 
 def ensure_full_airport_df():
     """Load route-level master_air on first Airport / Airline Metrics use."""
-    global airport_df, _full_airport_loaded
+    global airport_df, _full_airport_loaded, _full_airport_load_error
     if _full_airport_loaded:
         return airport_df
-    full = pd.read_parquet(MASTER_AIR_PARQUET_URL)
-    optimize_airport_df_memory(full)
-    airport_df = full
-    _full_airport_loaded = True
-    gc.collect()
+    if _full_airport_load_error is not None:
+        raise RuntimeError(_full_airport_load_error)
+    with _full_load_lock:
+        if _full_airport_loaded:
+            return airport_df
+        if _full_airport_load_error is not None:
+            raise RuntimeError(_full_airport_load_error)
+        try:
+            print("loading full master_air.parquet ...")
+            full = pd.read_parquet(MASTER_AIR_PARQUET_URL)
+            optimize_airport_df_memory(full)
+            airport_df = full
+            _full_airport_loaded = True
+            gc.collect()
+            mb = airport_df.memory_usage(deep=True).sum() / 1024**2
+            print(f"full master_air loaded ({mb:.1f} MB)")
+        except Exception as exc:
+            _full_airport_load_error = f"Failed to load master_air.parquet: {exc}"
+            print(_full_airport_load_error)
+            raise RuntimeError(_full_airport_load_error) from exc
     return airport_df
+
+
+def start_full_airport_preload():
+    """Begin loading full master_air in the background after slim startup."""
+    if _full_airport_loaded:
+        return
+
+    def _run():
+        try:
+            ensure_full_airport_df()
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True, name="preload-master-air").start()
 
 
 def dest_table_for_airport(display_name):
@@ -269,9 +302,14 @@ def initialize_core_state():
 
 def _load_once(global_name, url):
     frame = globals()[global_name]
-    if frame is None:
-        globals()[global_name] = pd.read_parquet(url)
-    return globals()[global_name]
+    if frame is not None:
+        return frame
+    with _edge_load_lock:
+        frame = globals()[global_name]
+        if frame is None:
+            print(f"loading {global_name} ...")
+            globals()[global_name] = pd.read_parquet(url)
+        return globals()[global_name]
 
 
 def load_carriers_edges():

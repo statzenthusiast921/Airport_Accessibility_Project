@@ -1,4 +1,5 @@
 import gc
+import traceback
 import pandas as pd
 import numpy as np
 import os
@@ -7,10 +8,10 @@ import dash
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
+from dash.exceptions import PreventUpdate
 from dash import dash_table
 import plotly.graph_objects as go
 import math
-import visdcc
 import helper_data
 from helper_data import (
     CONN_AIRPORT_ALL,
@@ -21,6 +22,7 @@ from helper_data import (
     ensure_full_airport_df,
     initialize_core_state,
     load_startup_airport_index,
+    start_full_airport_preload,
 )
 from helper_functions import (
     great_circle_points,
@@ -58,6 +60,7 @@ from helper_functions import (
 # ----- Startup: slim airport index only; full master_air loads on first Metrics tab use
 load_startup_airport_index()
 initialize_core_state()
+start_full_airport_preload()
 gc.collect()
 print("startup airport index MB:", helper_data.airport_df.memory_usage(deep=True).sum() / 1024**2)
 
@@ -89,10 +92,12 @@ tab_selected_style = {
 
 
 
-app = dash.Dash(__name__,assets_folder=os.path.join(os.curdir,"assets"))
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+app = dash.Dash(__name__, assets_folder=os.path.join(_APP_DIR, "assets"))
+app.config.suppress_callback_exceptions = True
 server = app.server
 app.layout = html.Div([
-    dcc.Tabs([
+    dcc.Tabs(id="main-tabs", style=tabs_styles, children=[
         dcc.Tab(label='Welcome',value='tab-1',style=tab_style, selected_style=tab_selected_style,
                children=[
                    html.Div([
@@ -241,7 +246,7 @@ app.layout = html.Div([
                 ], className="w-100"),
                 dbc.Row([
                     dbc.Col([
-                        dbc.Label('Choose a country:'),
+                        dbc.Label('Choose a country:', style=LABEL_STYLE_WHITE),
                         dcc.Dropdown(
                             id='dropdown1',
                             style={'color':'black'},
@@ -250,7 +255,7 @@ app.layout = html.Div([
                         )
                     ], width = 6),
                     dbc.Col([
-                        dbc.Label('Choose an airport:'),
+                        dbc.Label('Choose an airport:', style=LABEL_STYLE_WHITE),
                         dcc.Dropdown(
                             id='dropdown2',
                             style={'color':'black'},
@@ -328,7 +333,7 @@ app.layout = html.Div([
                 ], className="w-100"),
                 dbc.Row([
                     dbc.Col([
-                        dbc.Label('Choose a country:'),
+                        dbc.Label('Choose a country:', style=LABEL_STYLE_WHITE),
                         dcc.Dropdown(
                             id='dropdown3',
                             style={'color':'black'},
@@ -337,7 +342,7 @@ app.layout = html.Div([
                         )
                     ], width = 6),
                     dbc.Col([
-                        dbc.Label('Choose an airport:'),
+                        dbc.Label('Choose an airport:', style=LABEL_STYLE_WHITE),
                         dcc.Dropdown(
                             id='dropdown4',
                             style={'color':'black'},
@@ -617,29 +622,29 @@ def set_airport_options(selected_country):
 )
 
 def airport_selection_stats(selected_airport):
-    ensure_full_airport_df()
-    routes = helper_data.airport_df
-    filtered = dest_table_for_airport(selected_airport)
-    filtered_again = routes[routes['display_name'] == selected_airport]
+    try:
+        ensure_full_airport_df()
+        routes = helper_data.airport_df
+        filtered = dest_table_for_airport(selected_airport)
+        filtered_again = routes[routes['display_name'] == selected_airport]
 
-    #----- Grab first 2 metrics from airport_df
-    metric1 = filtered_again['num_dests'].unique()[0]
+        metric1 = filtered_again['num_dests'].unique()[0]
+        diff_dests = filtered['dest_iata'].unique()
+        filtering_to_only_dests = routes[routes['iata'].isin(diff_dests)]
+        metric2 = len(filtering_to_only_dests['country'].unique())
+        metric3 = round(filtered['Connectivity Index'].unique()[0], 2)
+        metric4 = round(filtered['Redundancy Index'].unique()[0], 2)
+        airport_code = filtered_again['iata'].unique()[0]
 
-    diff_dests = filtered['dest_iata'].unique()
-    filtering_to_only_dests = routes[routes['iata'].isin(diff_dests)]
-    metric2 = len(filtering_to_only_dests['country'].unique())
-
-    #----- Grab last 2 metrics from destination table
-    metric3 = round(filtered['Connectivity Index'].unique()[0],2)
-    metric4 = round(filtered['Redundancy Index'].unique()[0],2)
-
-    airport_code = filtered_again['iata'].unique()[0]
-
-    card1 = build_metric_card_body(f"Destinations from {airport_code}", metric1)
-    card2 = build_metric_card_body(f"# Countries Accessible from {airport_code}", metric2)
-    card3 = build_metric_card_body(f"Connectivity Index for {airport_code}", metric3)
-    card4 = build_metric_card_body(f"Redundancy Index for {airport_code}", metric4)
-    return card1, card2, card3, card4
+        card1 = build_metric_card_body(f"Destinations from {airport_code}", metric1)
+        card2 = build_metric_card_body(f"# Countries Accessible from {airport_code}", metric2)
+        card3 = build_metric_card_body(f"Connectivity Index for {airport_code}", metric3)
+        card4 = build_metric_card_body(f"Redundancy Index for {airport_code}", metric4)
+        return card1, card2, card3, card4
+    except Exception as exc:
+        traceback.print_exc()
+        err = build_metric_card_body("Data loading", str(exc)[:120])
+        return err, err, err, err
 
 
 @app.callback(
@@ -765,7 +770,11 @@ def destination_map(selected_airport):
     Input("dropdown2", "value"),
 )
 def update_dest_table(selected_airport):
-    ensure_full_airport_df()
+    try:
+        ensure_full_airport_df()
+    except Exception as exc:
+        traceback.print_exc()
+        return [], [], 0
     routes = helper_data.airport_df
     filtered = dest_table_for_airport(selected_airport)
     dest_metrics = routes[
@@ -827,7 +836,11 @@ def set_airline_airport_options(selected_country):
     Input('dropdown4', 'value'),
 )
 def airline_treemap_chart(selected_airport):
-    ensure_full_airport_df()
+    try:
+        ensure_full_airport_df()
+    except Exception as exc:
+        traceback.print_exc()
+        return _empty_map_figure(str(exc)[:120])
     routes = helper_data.airport_df
     airport = routes[routes["display_name"] == selected_airport][["iata", "dest_iata", "carriers"]]
     airport["airline_names"] = airport["carriers"].apply(
@@ -877,7 +890,12 @@ def airline_treemap_chart(selected_airport):
     Input('dropdown4', 'value'),
 )
 def airline_stats(selected_country, selected_airport):
-    ensure_full_airport_df()
+    try:
+        ensure_full_airport_df()
+    except Exception as exc:
+        traceback.print_exc()
+        err = build_metric_card_body("Data loading", str(exc)[:120])
+        return err, err, err, err
     routes = helper_data.airport_df
     country_filtered = routes[routes['country'].astype(str) == str(selected_country)].copy()
     country_filtered["airline_names"] = country_filtered["carriers"].apply(extract_airline_names)
@@ -987,7 +1005,13 @@ def _empty_map_figure(message):
     Input('dropdown5', 'value'),
 )
 def dominant_airline_by_country_map(selected_country, map_mode, selected_airline):
-    country_airline_mapping_df, airport_airline_share_df, top_airlines = prepare_country_airline_data(selected_country)
+    try:
+        country_airline_mapping_df, airport_airline_share_df, top_airlines = (
+            prepare_country_airline_data(selected_country)
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return _empty_map_figure(str(exc)[:120])
     if country_airline_mapping_df.empty:
         return _empty_map_figure(f"No airline map data for {selected_country}.")
 
@@ -1107,8 +1131,12 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
     Input('dropdown7', 'value'),
 )
 def set_connections_airport_dropdown(selected_country):
+    country_key = str(selected_country)
     country_airports = (
-        airport_df.loc[airport_df["country"] == selected_country, ["iata", "name", "country"]]
+        airport_df.loc[
+            airport_df["country"].astype(str) == country_key,
+            ["iata", "name", "country"],
+        ]
         .drop_duplicates(subset=["iata"])
         .sort_values("name")
     )
@@ -1133,13 +1161,22 @@ def set_connections_airport_dropdown(selected_country):
     Output('network_chart', 'children'),
     Output('network-node-meta', 'data'),
     Output('conn-metric-cards', 'children'),
+    Input('main-tabs', 'value'),
     Input('dropdown6', 'value'),
     Input('dropdown7', 'value'),
     Input('dropdown_conn_airport', 'value'),
+    prevent_initial_call=True,
 )
-def network_connections(connection_type, selected_country, focus_airport):
+def network_connections(active_tab, connection_type, selected_country, focus_airport):
+    if active_tab != 'tab-4':
+        raise PreventUpdate
     from helper_network import build_network_connection
-    return build_network_connection(connection_type, selected_country, focus_airport)
+    try:
+        return build_network_connection(connection_type, selected_country, focus_airport)
+    except Exception as exc:
+        traceback.print_exc()
+        msg = html.P(str(exc)[:200], style={"color": "#fff"})
+        return msg, {}, msg
 
 @app.callback(
     Output('network-node-detail', 'children'),
