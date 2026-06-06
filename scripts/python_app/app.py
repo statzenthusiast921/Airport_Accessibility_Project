@@ -1,3 +1,4 @@
+import gc
 import pandas as pd
 import numpy as np
 import os
@@ -15,11 +16,10 @@ from helper_data import (
     HOVER_COLS,
     PROXIMITY_EDGE_MAX_MILES,
     connection_type_choices,
-    EDGES_AIRLINE_AIRPORT_PARQUET_URL,
-    EDGES_FEATURE_SIMILARITY_PARQUET_URL,
-    EDGES_PROXIMITY_PARQUET_URL,
     MASTER_AIR_PARQUET_URL,
-    initialize_derived_state,
+    dest_table_for_airport,
+    initialize_core_state,
+    optimize_airport_df_memory,
 )
 from helper_functions import (
     great_circle_points,
@@ -62,27 +62,15 @@ from helper_network import (
 
 
 
-# ----- Load datasets from GitHub (all parquet downloads happen here)
+# ----- Startup: master_air only; pre-merged edge parquets load on first Connections use
 helper_data.airport_df = pd.read_parquet(MASTER_AIR_PARQUET_URL)
-print(helper_data.airport_df.memory_usage(deep=True).sum() / 1024**2)
+optimize_airport_df_memory(helper_data.airport_df)
+print("airport_df MB:", helper_data.airport_df.memory_usage(deep=True).sum() / 1024**2)
 
-helper_data.graph1 = pd.read_parquet(EDGES_AIRLINE_AIRPORT_PARQUET_URL)
-print(helper_data.graph1.memory_usage(deep=True).sum() / 1024**2)
-
-helper_data.graph2 = pd.read_parquet(EDGES_FEATURE_SIMILARITY_PARQUET_URL)
-print(helper_data.graph2.memory_usage(deep=True).sum() / 1024**2)
-
-helper_data.graph3 = pd.read_parquet(EDGES_PROXIMITY_PARQUET_URL)
-print(helper_data.graph3.memory_usage(deep=True).sum() / 1024**2)
-
-initialize_derived_state()
-# Shared-destination edge tables load lazily via helper_data on first Connections use (~164 MB saved at startup).
-del helper_data.graph1
-del helper_data.graph2
-del helper_data.graph3
+initialize_core_state()
+gc.collect()
 
 airport_df = helper_data.airport_df
-dest_tbl = helper_data.dest_tbl
 country_choices = helper_data.country_choices
 airport_choices = helper_data.airport_choices
 country_airport_dict = helper_data.country_airport_dict
@@ -638,7 +626,7 @@ def set_airport_options(selected_country):
 )
 
 def airport_selection_stats(selected_airport):
-    filtered = dest_tbl[dest_tbl["display_name"] == selected_airport]
+    filtered = dest_table_for_airport(selected_airport)
     filtered_again = airport_df[airport_df['display_name'] == selected_airport]
 
     #----- Grab first 2 metrics from airport_df
@@ -705,7 +693,7 @@ def destination_map(selected_airport):
     for _, dest in dest_info.iterrows():
         lats, lons = great_circle_points(origin_lat, origin_lon, dest['latitude'], dest['longitude'])
         lats, lons = split_antimeridian_segments(lats, lons)
-        fig.add_trace(go.Scattermapbox(
+        fig.add_trace(go.Scattermap(
             lat=lats, lon=lons,
             mode='lines',
             line=dict(width=1, color='blue'),
@@ -715,7 +703,7 @@ def destination_map(selected_airport):
 
     # Destination markers (red)
     fig.add_trace(
-        go.Scattermapbox(
+        go.Scattermap(
             lat=dest_info['latitude'],
             lon=dest_info['longitude'],
             mode='markers',
@@ -735,7 +723,7 @@ def destination_map(selected_airport):
     # Origin marker (yellow)
     origin_info = coord_lookup[coord_lookup.index == origin_iata].reset_index()
     fig.add_trace(
-        go.Scattermapbox(
+        go.Scattermap(
             lat=[origin_lat],
             lon=[origin_lon],
             mode='markers',
@@ -756,9 +744,10 @@ def destination_map(selected_airport):
     ))
 
     fig.update_layout(
-        height = 360,
-        mapbox_style='carto-darkmatter',
-        mapbox=dict(center=dict(lat=origin_lat, lon=origin_lon), zoom=2),
+        height=360,
+        map_style='carto-darkmatter',
+        map_center=dict(lat=origin_lat, lon=origin_lon),
+        map_zoom=2,
         margin=dict(l=0, r=0, t=0, b=0),
         legend=dict(
             bgcolor='rgba(255,255,255,0.7)',
@@ -781,7 +770,7 @@ def destination_map(selected_airport):
     Input("dropdown2", "value"),
 )
 def update_dest_table(selected_airport):
-    filtered = dest_tbl[dest_tbl["display_name"] == selected_airport]
+    filtered = dest_table_for_airport(selected_airport)
     dest_metrics = airport_df[
         ["display_name", "iata", "num_dests","redundancy_score", "connectivity_index"]
     ].drop_duplicates(subset=["display_name"])
@@ -970,6 +959,27 @@ def update_heatmap_airline_control(selected_country, map_mode, current_airline):
     return options, value, heat_style, row_style
 
 
+def _empty_map_figure(message):
+    fig = go.Figure()
+    fig.update_layout(
+        height=AIRLINE_MAP_FIGURE_HEIGHT,
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        map_style="carto-darkmatter",
+        annotations=[{
+            "text": message,
+            "xref": "paper",
+            "yref": "paper",
+            "x": 0.5,
+            "y": 0.5,
+            "showarrow": False,
+            "font": {"color": "white", "size": 14},
+        }],
+        margin=dict(l=0, r=0, t=0, b=0),
+    )
+    return fig
+
+
 @app.callback(
     Output('dominant_airline_by_country_map', 'figure'),
     Input('dropdown3', 'value'),
@@ -979,7 +989,7 @@ def update_heatmap_airline_control(selected_country, map_mode, current_airline):
 def dominant_airline_by_country_map(selected_country, map_mode, selected_airline):
     country_airline_mapping_df, airport_airline_share_df, top_airlines = prepare_country_airline_data(selected_country)
     if country_airline_mapping_df.empty:
-        return go.Figure()
+        return _empty_map_figure(f"No airline map data for {selected_country}.")
 
     legend_order = list(top_airlines) + ["Other"]
     color_map = get_airline_color_map(top_airlines)
@@ -989,14 +999,14 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
             airport_airline_share_df["selected_airline"] == selected_airline
         ].copy()
         if heat_df.empty:
-            return go.Figure()
+            return _empty_map_figure(f"No share data for {selected_airline} in {selected_country}.")
 
         center, zoom = get_country_view(country_airline_mapping_df)
         airline_color = color_map.get(selected_airline, AIRLINE_MAP_COLORS[0])
         max_share = max(float(heat_df["pct_share"].max()), 0.01)
         visible_max_share = max_share * 0.85 if max_share > 0.05 else max_share
 
-        fig = px.density_mapbox(
+        fig = px.density_map(
             heat_df,
             lat="latitude",
             lon="longitude",
@@ -1004,6 +1014,7 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
             radius=28,
             center=center,
             zoom=zoom,
+            map_style="carto-darkmatter",
             height=AIRLINE_MAP_FIGURE_HEIGHT,
             custom_data=["selected_airline", "pct_share", "city_name", "iata"],
             color_continuous_scale=build_heat_colorscale(airline_color),
@@ -1019,7 +1030,6 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
             )
         )
         fig.update_layout(
-            mapbox_style="carto-darkmatter",
             paper_bgcolor="black",
             plot_bgcolor="black",
             coloraxis_colorbar=dict(
@@ -1038,7 +1048,8 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
 
         return fig
 
-    fig = px.scatter_mapbox(
+    center, zoom = get_country_view(country_airline_mapping_df)
+    fig = px.scatter_map(
         country_airline_mapping_df,
         lat="latitude",
         lon="longitude",
@@ -1053,7 +1064,9 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
         size="marker_size_value",
         category_orders={"dominant_airline_group": legend_order},
         color_discrete_map=color_map,
-        zoom=2,
+        center=center,
+        zoom=zoom,
+        map_style="carto-darkmatter",
         height=AIRLINE_MAP_FIGURE_HEIGHT,
         size_max=18,
     )
@@ -1069,7 +1082,6 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
         )
     )
     fig.update_layout(
-        mapbox_style="carto-darkmatter",
         legend_title_text="Dominant Airline",
         legend=dict(
             bgcolor="rgba(255,255,255,0.8)",
@@ -1080,7 +1092,7 @@ def dominant_airline_by_country_map(selected_country, map_mode, selected_airline
             xanchor="left",
             yanchor="top",
         ),
-        margin=dict(l=0, r=0, t=0, b=0)
+        margin=dict(l=0, r=0, t=0, b=0),
     )
     return fig
 

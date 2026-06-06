@@ -9,35 +9,30 @@ GITHUB_DATA_BASE = (
 )
 
 MASTER_AIR_PARQUET_URL = GITHUB_DATA_BASE + "master_air.parquet"
-EDGES_AIRLINE_AIRPORT_PARQUET_URL = GITHUB_DATA_BASE + "edges_airline_airport.parquet"
-EDGES_FEATURE_SIMILARITY_PARQUET_URL = GITHUB_DATA_BASE + "edges_feature_similarity.parquet"
-EDGES_PROXIMITY_PARQUET_URL = GITHUB_DATA_BASE + "edges_proximity.parquet"
-SHARED_DESTINATIONS_PARQUET_URL = GITHUB_DATA_BASE + "edges_shared_destinations.parquet"
-SHARED_DESTINATIONS_COSINE_PARQUET_URL = (
-    GITHUB_DATA_BASE + "edges_shared_destinations_cosine.parquet"
+EDGES_AIRLINE_AIRPORT_MERGED_URL = GITHUB_DATA_BASE + "edges_airline_airport_merged.parquet"
+EDGES_FEATURE_SIMILARITY_MERGED_URL = GITHUB_DATA_BASE + "edges_feature_similarity_merged.parquet"
+EDGES_PROXIMITY_MERGED_URL = GITHUB_DATA_BASE + "edges_proximity_merged.parquet"
+EDGES_SHARED_DESTINATIONS_MERGED_URL = (
+    GITHUB_DATA_BASE + "edges_shared_destinations_merged.parquet"
+)
+EDGES_SHARED_DESTINATIONS_COSINE_MERGED_URL = (
+    GITHUB_DATA_BASE + "edges_shared_destinations_cosine_merged.parquet"
 )
 
-# Populated by app.py before initialize_derived_state() runs.
 airport_df = None
-graph1 = None
-graph2 = None
-graph3 = None
-merged_shared_destinations_edges = None
-merged_shared_destinations_cosine_edges = None
+carriers_edges = None
+similarity_edges = None
+proximity_edges = None
+shared_destinations_edges = None
+shared_destinations_cosine_edges = None
 
-IATA_TO_COUNTRY = None
-graph1_merged = None
 AIRLINE_IATA_TO_NAME = None
 AIRPORT_IATA_META = None
 SIMILARITY_AIRPORT_PROFILE = None
-graph2_merged = None
-graph3_merged = None
-dest_tbl = None
 country_choices = None
 airport_choices = None
 country_airport_dict = None
 
-# Upper bound used when building edges_proximity.parquet (great-circle miles).
 PROXIMITY_EDGE_MAX_MILES = 250.0
 
 SIMILARITY_Z_FEATURE_KEYS = (
@@ -93,12 +88,66 @@ CONNECTION_TYPE_DEFINITIONS = [
     ),
 ]
 
+_DEST_TABLE_COLUMNS = {
+    "dest_name": "Destination",
+    "connectivity_index": "Connectivity Index",
+    "redundancy_score": "Redundancy Index",
+}
 
-def attach_country_columns_to_edges(edges_df):
-    out = edges_df.copy()
-    out["source_country"] = out["source"].map(IATA_TO_COUNTRY)
-    out["target_country"] = out["target"].map(IATA_TO_COUNTRY)
-    return out
+
+def _column_values_are_hashable(series):
+    sample = series.dropna().head(20)
+    if sample.empty:
+        return True
+    for val in sample:
+        if isinstance(val, (list, dict, np.ndarray)):
+            return False
+    return True
+
+
+# Keep as plain strings — categorizing these breaks dropdown filters and Plotly maps.
+_NO_CATEGORY_COLS = frozenset({
+    "country",
+    "city_name",
+    "display_name",
+    "iata",
+    "name",
+    "dest_name",
+    "dest_iata",
+})
+
+
+def optimize_airport_df_memory(df):
+    """Shrink string/numeric dtypes in place to lower RSS on small instances."""
+    n = len(df)
+    if n == 0:
+        return df
+    for col in _NO_CATEGORY_COLS:
+        if col in df.columns and isinstance(df[col].dtype, pd.CategoricalDtype):
+            df[col] = df[col].astype(str)
+    for col in df.columns:
+        if col in _NO_CATEGORY_COLS or col == "carriers":
+            continue
+        if df[col].dtype == object and _column_values_are_hashable(df[col]):
+            try:
+                nunique = df[col].nunique()
+            except TypeError:
+                continue
+            if 0 < nunique < n * 0.5:
+                df[col] = df[col].astype("category")
+    for col in df.select_dtypes(include=["float64"]).columns:
+        df[col] = pd.to_numeric(df[col], downcast="float")
+    for col in df.select_dtypes(include=["int64"]).columns:
+        df[col] = pd.to_numeric(df[col], downcast="integer")
+    return df
+
+
+def dest_table_for_airport(display_name):
+    mask = airport_df["display_name"] == display_name
+    return airport_df.loc[
+        mask,
+        ["display_name", "dest_name", "dest_iata", "connectivity_index", "redundancy_score"],
+    ].rename(columns=_DEST_TABLE_COLUMNS)
 
 
 def build_airline_iata_to_name(airport_frame):
@@ -149,73 +198,67 @@ def build_similarity_airport_profiles():
     return profiles
 
 
-def initialize_derived_state():
-    """Build lookups and merged edge tables from raw frames loaded in app.py."""
-    global IATA_TO_COUNTRY
-    global graph1_merged
+def ensure_airline_iata_to_name():
+    """Built on first Carriers network view (scans carriers column)."""
     global AIRLINE_IATA_TO_NAME
-    global AIRPORT_IATA_META
+    if AIRLINE_IATA_TO_NAME is None:
+        AIRLINE_IATA_TO_NAME = build_airline_iata_to_name(airport_df)
+    return AIRLINE_IATA_TO_NAME
+
+
+def ensure_similarity_profiles():
+    """Built on first Statistical Similarity view (heavy; not at app startup)."""
     global SIMILARITY_AIRPORT_PROFILE
-    global graph2_merged
-    global graph3_merged
-    global dest_tbl
+    if SIMILARITY_AIRPORT_PROFILE is None:
+        SIMILARITY_AIRPORT_PROFILE = build_similarity_airport_profiles()
+    return SIMILARITY_AIRPORT_PROFILE
+
+
+def initialize_core_state():
+    """Lightweight lookups for dropdowns and labels (safe at app startup)."""
+    global AIRPORT_IATA_META
     global country_choices
     global airport_choices
     global country_airport_dict
 
-    IATA_TO_COUNTRY = (
-        airport_df.drop_duplicates(subset=["iata"])
-        .set_index("iata")["country"]
-    )
-
-    airport_df1 = airport_df[["iata", "country", "display_name"]].drop_duplicates()
-    airport_df1.rename(columns={"iata": "airport"}, inplace=True)
-    graph1_merged = pd.merge(graph1, airport_df1, on="airport")
-
-    AIRLINE_IATA_TO_NAME = build_airline_iata_to_name(airport_df)
     AIRPORT_IATA_META = (
         airport_df.drop_duplicates(subset=["iata"])
         .set_index("iata")[["display_name", "country"]]
         .to_dict("index")
     )
-    SIMILARITY_AIRPORT_PROFILE = build_similarity_airport_profiles()
-
-    graph2_merged = attach_country_columns_to_edges(graph2)
-    graph3_merged = attach_country_columns_to_edges(graph3)
-
-    dest_tbl = (
-        airport_df[
-            ["display_name", "dest_name", "dest_iata", "connectivity_index", "redundancy_score"]
-        ].rename(
-            columns={
-                "dest_name": "Destination",
-                "connectivity_index": "Connectivity Index",
-                "redundancy_score": "Redundancy Index",
-            }
-        )
-    )
-
-    country_choices = sorted(airport_df["country"].unique())
-    airport_choices = sorted(airport_df["display_name"].unique())
+    country_choices = sorted(airport_df["country"].astype(str).unique())
+    airport_choices = sorted(airport_df["display_name"].astype(str).unique())
 
     df_for_dict = airport_df[["country", "display_name"]]
     df_for_dict = df_for_dict.drop_duplicates(subset="display_name", keep="first")
     country_airport_dict = df_for_dict.groupby("country")["display_name"].apply(list).to_dict()
 
 
-def load_merged_shared_destinations_edges():
-    """Load on first Connections-tab use (~97 MB); not loaded at app startup."""
-    global merged_shared_destinations_edges
-    if merged_shared_destinations_edges is None:
-        raw = pd.read_parquet(SHARED_DESTINATIONS_PARQUET_URL)
-        merged_shared_destinations_edges = attach_country_columns_to_edges(raw)
-    return merged_shared_destinations_edges
+def _load_once(global_name, url):
+    frame = globals()[global_name]
+    if frame is None:
+        globals()[global_name] = pd.read_parquet(url)
+    return globals()[global_name]
 
 
-def load_merged_shared_destinations_cosine_edges():
-    """Load on first Connections-tab use (~67 MB); not loaded at app startup."""
-    global merged_shared_destinations_cosine_edges
-    if merged_shared_destinations_cosine_edges is None:
-        raw = pd.read_parquet(SHARED_DESTINATIONS_COSINE_PARQUET_URL)
-        merged_shared_destinations_cosine_edges = attach_country_columns_to_edges(raw)
-    return merged_shared_destinations_cosine_edges
+def load_carriers_edges():
+    return _load_once("carriers_edges", EDGES_AIRLINE_AIRPORT_MERGED_URL)
+
+
+def load_similarity_edges():
+    return _load_once("similarity_edges", EDGES_FEATURE_SIMILARITY_MERGED_URL)
+
+
+def load_proximity_edges():
+    return _load_once("proximity_edges", EDGES_PROXIMITY_MERGED_URL)
+
+
+def load_shared_destinations_edges():
+    return _load_once("shared_destinations_edges", EDGES_SHARED_DESTINATIONS_MERGED_URL)
+
+
+def load_shared_destinations_cosine_edges():
+    return _load_once(
+        "shared_destinations_cosine_edges",
+        EDGES_SHARED_DESTINATIONS_COSINE_MERGED_URL,
+    )

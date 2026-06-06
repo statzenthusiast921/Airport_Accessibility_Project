@@ -118,8 +118,9 @@ def strongest_similarity_label(filtered):
 
 def similarity_feature_distance(iata_a, iata_b):
     """Equal-weight mean of |Δz| for connectivity, log(1+dests), redundancy, and elevation."""
-    pa = helper_data.SIMILARITY_AIRPORT_PROFILE.get(iata_a)
-    pb = helper_data.SIMILARITY_AIRPORT_PROFILE.get(iata_b)
+    profiles = helper_data.ensure_similarity_profiles()
+    pa = profiles.get(iata_a)
+    pb = profiles.get(iata_b)
     if not pa or not pb:
         return np.nan
     diffs = [abs(pa[k] - pb[k]) for k in helper_data.SIMILARITY_Z_FEATURE_KEYS]
@@ -158,7 +159,8 @@ def similarity_pct_diff_vs_focus(clicked_val, focus_val):
 
 
 def build_statistical_similarity_detail_body(info, focus_iata=None):
-    profile = helper_data.SIMILARITY_AIRPORT_PROFILE.get(info.get("iata"))
+    profiles = helper_data.ensure_similarity_profiles()
+    profile = profiles.get(info.get("iata"))
     if not profile:
         return [
             html.P("Profile data unavailable for this airport.", style={"color": "#e8ecf4"}),
@@ -166,7 +168,7 @@ def build_statistical_similarity_detail_body(info, focus_iata=None):
 
     body = []
     if focus_iata and focus_iata != CONN_AIRPORT_ALL:
-        focus_profile = helper_data.SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
+        focus_profile = profiles.get(focus_iata)
         if focus_profile:
             focus_meta = helper_data.AIRPORT_IATA_META.get(focus_iata) or {}
             focus_name = format_airport_label_from_iata(focus_iata)
@@ -186,7 +188,7 @@ def build_statistical_similarity_detail_body(info, focus_iata=None):
         ("Elevation (ft)", "elevation", True),
     )
     focus_profile = (
-        helper_data.SIMILARITY_AIRPORT_PROFILE.get(focus_iata)
+        profiles.get(focus_iata)
         if focus_iata and focus_iata != CONN_AIRPORT_ALL
         else None
     )
@@ -495,7 +497,8 @@ def _peer_lines_from_edges(edges_df, line_formatter, sort_descending=True):
 # --------------------#
 
 def build_carriers(selected_country, focus_airport):
-    routes = helper_data.graph1_merged.loc[helper_data.graph1_merged["country"] == selected_country].copy()
+    carriers = helper_data.load_carriers_edges()
+    routes = carriers.loc[carriers["country"] == selected_country].copy()
     if routes.empty:
         return _no_data("No data available for this selection")
 
@@ -516,8 +519,9 @@ def build_carriers(selected_country, focus_airport):
     edges = []
     node_meta = {}
 
+    airline_names = helper_data.ensure_airline_iata_to_name()
     for airline in airline_list:
-        legal_name = helper_data.AIRLINE_IATA_TO_NAME.get(airline)
+        legal_name = airline_names.get(airline)
         label = legal_name if legal_name else airline
         airport_codes = routes.loc[routes["airline"] == airline, "airport"].unique().tolist()
         airport_codes.sort()
@@ -551,7 +555,7 @@ def build_carriers(selected_country, focus_airport):
         airline_codes.sort()
         airline_labels = []
         for code in airline_codes:
-            nm = helper_data.AIRLINE_IATA_TO_NAME.get(code)
+            nm = airline_names.get(code)
             airline_labels.append(f"{nm} ({code})" if nm else str(code))
         node_meta[airport] = {
             "kind": "airport",
@@ -639,7 +643,9 @@ def build_carriers(selected_country, focus_airport):
 # ---------------------------------- #
 
 def build_similarity(selected_country, focus_airport):
-    edges = helper_data.graph2_merged.loc[helper_data.graph2_merged["source_country"] == selected_country].copy()
+    helper_data.ensure_similarity_profiles()
+    similarity = helper_data.load_similarity_edges()
+    edges = similarity.loc[similarity["source_country"] == selected_country].copy()
     edges = _filter_edges_by_focus(edges, focus_airport)
     if edges.empty:
         return _no_data(
@@ -713,7 +719,8 @@ def build_similarity(selected_country, focus_airport):
 # --------------------- #
 
 def build_proximity(selected_country, focus_airport):
-    edges = helper_data.graph3_merged.loc[helper_data.graph3_merged["source_country"] == selected_country].copy()
+    proximity = helper_data.load_proximity_edges()
+    edges = proximity.loc[proximity["source_country"] == selected_country].copy()
     edges = _filter_edges_by_focus(edges, focus_airport)
     if edges.empty:
         return _no_data(
@@ -933,7 +940,7 @@ def build_shared_destinations_raw(selected_country, focus_airport):
     result = _build_shared_destinations(
         selected_country,
         focus_airport,
-        helper_data.load_merged_shared_destinations_edges,
+        helper_data.load_shared_destinations_edges,
         "shared_raw",
         "shared_dest_peers",
         lambda w: f"Raw overlap: {int(w)} shared destinations",
@@ -955,7 +962,7 @@ def build_shared_destinations_adjusted(selected_country, focus_airport):
     result = _build_shared_destinations(
         selected_country,
         focus_airport,
-        helper_data.load_merged_shared_destinations_cosine_edges,
+        helper_data.load_shared_destinations_cosine_edges,
         "shared_cosine",
         "shared_cosine_peers",
         lambda w: f"Hub-adjusted destination overlap: {float(w):.3f}",

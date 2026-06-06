@@ -249,8 +249,9 @@ AIRLINE_MAP_COLORS = [
 
 
 def prepare_country_airline_data(selected_country):
+    country_key = str(selected_country)
     country_filtered = helper_data.airport_df[
-        helper_data.airport_df["country"] == selected_country
+        helper_data.airport_df["country"].astype(str) == country_key
     ].copy()
     country_filtered["airline_names"] = country_filtered["carriers"].apply(
         extract_airline_names
@@ -265,15 +266,15 @@ def prepare_country_airline_data(selected_country):
         return pd.DataFrame(), pd.DataFrame(), []
 
     city_counts = (
-        airport_exploded.groupby(["city_name", "airline_names"])
+        airport_exploded.groupby(["city_name", "airline_names"], observed=True)
         .size()
         .reset_index(name="flight_count")
     )
-    city_counts["city_total"] = city_counts.groupby("city_name")["flight_count"].transform("sum")
+    city_counts["city_total"] = city_counts.groupby("city_name", observed=True)["flight_count"].transform("sum")
     city_counts["pct_share"] = city_counts["flight_count"] / city_counts["city_total"]
 
     dominant_airline = (
-        city_counts.loc[city_counts.groupby("city_name")["pct_share"].idxmax()]
+        city_counts.loc[city_counts.groupby("city_name", observed=True)["pct_share"].idxmax()]
         .reset_index(drop=True)
         .rename(columns={"airline_names": "dominant_airline"})
     )
@@ -320,19 +321,22 @@ def prepare_country_airline_data(selected_country):
     )
     country_airline_mapping_df["marker_size_value"] = np.where(
         country_airline_mapping_df["dominant_airline_group"] == "Other",
-        0.18,
-        country_airline_mapping_df["pct_share"],
+        8.0,
+        (country_airline_mapping_df["pct_share"] * 18).clip(lower=10.0),
     )
+    for col in ("dominant_airline_group", "dominant_airline_actual", "city_name", "iata"):
+        country_airline_mapping_df[col] = country_airline_mapping_df[col].astype(str)
 
     airport_airline_share_df = (
         airport_exploded.groupby(
-            ["display_name", "city_name", "iata", "latitude", "longitude", "airline_names"]
+            ["display_name", "city_name", "iata", "latitude", "longitude", "airline_names"],
+            observed=True,
         )
         .size()
         .reset_index(name="flight_count")
     )
     airport_airline_share_df["airport_total"] = airport_airline_share_df.groupby(
-        ["display_name", "iata"]
+        ["display_name", "iata"], observed=True
     )["flight_count"].transform("sum")
     airport_airline_share_df["pct_share"] = (
         airport_airline_share_df["flight_count"] / airport_airline_share_df["airport_total"]
@@ -352,7 +356,11 @@ def prepare_country_airline_data(selected_country):
     airport_airline_share_df = airport_airline_share_df.dropna(
         subset=["latitude", "longitude", "pct_share"]
     )
+    for col in ("selected_airline", "city_name", "iata", "display_name"):
+        if col in airport_airline_share_df.columns:
+            airport_airline_share_df[col] = airport_airline_share_df[col].astype(str)
 
+    top_airlines = [str(a) for a in top_airlines]
     return country_airline_mapping_df, airport_airline_share_df, top_airlines
 
 
